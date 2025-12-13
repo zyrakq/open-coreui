@@ -43,9 +43,8 @@ jobs:
       - name: Download Frontend Artifacts
         uses: actions/download-artifact@v6
         with:
-          path: artifacts
+          path: artifacts/frontend-build
           pattern: frontend-build
-          merge-multiple: true
 
       - name: Organize Release Assets
         run: |
