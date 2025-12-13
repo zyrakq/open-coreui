@@ -50,7 +50,20 @@ jobs:
         run: |
           mkdir -p release-assets
 
-          VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          # Get version from tauri.conf.json
+          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Determine version based on release tag
+          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
+            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
+            VERSION="${{ inputs.release_tag }}"
+            VERSION="${VERSION#v}"
+            echo "Using version from tag for all artifacts: ${VERSION}"
+          else
+            # Otherwise use tauri version
+            VERSION="${TAURI_VERSION}"
+            echo "Using version from tauri.conf.json: ${VERSION}"
+          fi
 
           # Copy desktop app packages (only the final installer packages)
           find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \;
@@ -115,7 +128,18 @@ jobs:
           TAG="${{ steps.release_info.outputs.tag_name }}"
           REPO="${{ github.repository }}"
           IS_RELEASE="${{ steps.release_info.outputs.is_release }}"
-          VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Get version from tauri.conf.json
+          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Determine version based on git tag
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            # Otherwise use tauri version
+            VERSION="${TAURI_VERSION}"
+          fi
 
           if [ "$IS_RELEASE" == "true" ]; then
             WARNING=""

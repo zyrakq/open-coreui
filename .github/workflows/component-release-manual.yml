@@ -96,7 +96,21 @@ jobs:
         run: |
           mkdir -p release-assets
 
-          VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          # Get version from tauri.conf.json
+          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Determine version based on release tag
+          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
+            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
+            VERSION="${{ inputs.release_tag }}"
+            VERSION="${VERSION#v}"
+            echo "Using version from tag for all artifacts: ${VERSION}"
+          else
+            # Otherwise use tauri version
+            VERSION="${TAURI_VERSION}"
+            echo "Using version from tauri.conf.json: ${VERSION}"
+          fi
+          
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
           # Copy desktop app packages (only the final installer packages)
