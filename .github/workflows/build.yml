@@ -2,6 +2,42 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      build_frontend:
+        description: 'Build Frontend'
+        required: false
+        type: boolean
+        default: true
+      build_backend:
+        description: 'Build Backend (Full with Frontend)'
+        required: false
+        type: boolean
+        default: true
+      build_backend_slim:
+        description: 'Build Backend (Slim without Frontend)'
+        required: false
+        type: boolean
+        default: true
+      build_desktop:
+        description: 'Build Desktop Application'
+        required: false
+        type: boolean
+        default: true
+      target_platforms:
+        description: 'Target Platforms (comma-separated: linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64, windows-arm64, or "all")'
+        required: false
+        type: string
+        default: 'all'
+      create_release:
+        description: 'Create Release (for manual testing)'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release Tag (e.g., v0.9.7-test or leave empty for auto-generated)'
+        required: false
+        type: string
+        default: ''
   push:
     branches:
       - main
@@ -25,6 +61,9 @@ env:
 jobs:
   # Build frontend once and cache it
   build-frontend:
+    if: |
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_frontend == true)
     runs-on: ubuntu-latest
     outputs:
       cache-hit: ${{ steps.cache-frontend.outputs.cache-hit }}
@@ -76,38 +115,65 @@ jobs:
 
   # Build slim backend binaries (no frontend embedded) for all platforms
   build-backend-slim:
+    if: |
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_backend_slim == true)
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            platform_id: linux-x64
           - platform: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
+            platform_id: linux-arm64
           - platform: macos-latest
             target: x86_64-apple-darwin
+            platform_id: macos-x64
           - platform: macos-latest
             target: aarch64-apple-darwin
+            platform_id: macos-arm64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            platform_id: windows-x64
           - platform: windows-latest
             target: aarch64-pc-windows-msvc
+            platform_id: windows-arm64
 
     runs-on: ${{ matrix.platform }}
 
     steps:
+      - name: Check if platform should be built
+        id: should_build
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && [[ "${{ inputs.target_platforms }}" != "all" ]]; then
+            if [[ "${{ inputs.target_platforms }}" == *"${{ matrix.platform_id }}"* ]]; then
+              echo "build=true" >> $GITHUB_OUTPUT
+            else
+              echo "build=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "build=true" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/checkout@v5
+        if: steps.should_build.outputs.build == 'true'
         with:
           submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.should_build.outputs.build == 'true'
         with:
           targets: ${{ matrix.target }}
 
       - name: Install sccache
+        if: steps.should_build.outputs.build == 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: swatinem/rust-cache@v2
+        if: steps.should_build.outputs.build == 'true'
         with:
           workspaces: backend -> target
           key: ${{ matrix.target }}-slim
@@ -116,7 +182,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Linux Dependencies
-        if: runner.os == 'Linux'
+        if: steps.should_build.outputs.build == 'true' && runner.os == 'Linux'
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo dpkg --add-architecture arm64
@@ -134,7 +200,7 @@ jobs:
           fi
 
       - name: Build Backend Slim (Unix)
-        if: runner.os != 'Windows'
+        if: steps.should_build.outputs.build == 'true' && runner.os != 'Windows'
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           OPENSSL_DIR: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/lib/aarch64-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu' && '/usr/lib/x86_64-linux-gnu' || '' }}
@@ -152,7 +218,7 @@ jobs:
           cp target/${{ matrix.target }}/release/open-webui-rust ../bin/open-coreui-slim-${{ matrix.target }}
 
       - name: Build Backend Slim (Windows)
-        if: runner.os == 'Windows'
+        if: steps.should_build.outputs.build == 'true' && runner.os == 'Windows'
         env:
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_INCREMENTAL: 0
@@ -164,6 +230,7 @@ jobs:
           copy target/${{ matrix.target }}/release/open-webui-rust.exe ..\bin\open-coreui-slim-${{ matrix.target }}.exe
 
       - name: Upload Slim Backend Artifacts
+        if: steps.should_build.outputs.build == 'true'
         uses: actions/upload-artifact@v5
         with:
           name: backend-slim-${{ matrix.target }}
@@ -174,42 +241,72 @@ jobs:
   # Build backend and desktop in one job
   build:
     needs: build-frontend
+    if: |
+      always() &&
+      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
+      ((github.event_name == 'push') ||
+       (github.event_name == 'workflow_dispatch' && (inputs.build_backend == true || inputs.build_desktop == true)))
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            platform_id: linux-x64
           - platform: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
+            platform_id: linux-arm64
           - platform: macos-latest
             target: x86_64-apple-darwin
+            platform_id: macos-x64
           - platform: macos-latest
             target: aarch64-apple-darwin
+            platform_id: macos-arm64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            platform_id: windows-x64
           - platform: windows-latest
             target: aarch64-pc-windows-msvc
+            platform_id: windows-arm64
 
     runs-on: ${{ matrix.platform }}
 
     steps:
+      - name: Check if platform should be built
+        id: should_build
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && [[ "${{ inputs.target_platforms }}" != "all" ]]; then
+            if [[ "${{ inputs.target_platforms }}" == *"${{ matrix.platform_id }}"* ]]; then
+              echo "build=true" >> $GITHUB_OUTPUT
+            else
+              echo "build=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "build=true" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/checkout@v5
+        if: steps.should_build.outputs.build == 'true'
         with:
           submodules: recursive
 
       - uses: oven-sh/setup-bun@v2
+        if: steps.should_build.outputs.build == 'true'
         with:
           bun-version: latest
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.should_build.outputs.build == 'true'
         with:
           targets: ${{ matrix.target }}
 
       - name: Install sccache
+        if: steps.should_build.outputs.build == 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: swatinem/rust-cache@v2
+        if: steps.should_build.outputs.build == 'true'
         with:
           workspaces: |
             backend -> target
@@ -220,6 +317,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache Tauri CLI
+        if: steps.should_build.outputs.build == 'true'
         id: cache-tauri-cli
         uses: actions/cache@v4
         with:
@@ -227,19 +325,20 @@ jobs:
           key: tauri-cli-2.0.0-${{ runner.os }}
 
       - name: Install Tauri CLI
-        if: steps.cache-tauri-cli.outputs.cache-hit != 'true'
+        if: steps.should_build.outputs.build == 'true' && steps.cache-tauri-cli.outputs.cache-hit != 'true'
         env:
           RUSTC_WRAPPER: ""
         run: cargo install tauri-cli --version "^2.0.0" --locked --force
 
       - name: Download Frontend Build
+        if: steps.should_build.outputs.build == 'true'
         uses: actions/download-artifact@v6
         with:
           name: frontend-build
           path: frontend/build/
 
       - name: Install Linux Dependencies
-        if: runner.os == 'Linux'
+        if: steps.should_build.outputs.build == 'true' && runner.os == 'Linux'
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             # For ARM64 cross-compilation, configure multi-arch first
@@ -259,7 +358,10 @@ jobs:
           fi
 
       - name: Build Backend (Unix)
-        if: runner.os != 'Windows'
+        if: |
+          steps.should_build.outputs.build == 'true' &&
+          runner.os != 'Windows' &&
+          ((github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.build_backend == true))
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           OPENSSL_DIR: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/lib/aarch64-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu' && '/usr/lib/x86_64-linux-gnu' || '' }}
@@ -277,7 +379,10 @@ jobs:
           cp target/${{ matrix.target }}/release/open-webui-rust ../bin/open-coreui-${{ matrix.target }}
 
       - name: Build Backend (Windows)
-        if: runner.os == 'Windows'
+        if: |
+          steps.should_build.outputs.build == 'true' &&
+          runner.os == 'Windows' &&
+          ((github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.build_backend == true))
         env:
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_INCREMENTAL: 0
@@ -288,7 +393,10 @@ jobs:
           copy target/${{ matrix.target }}/release/open-webui-rust.exe ..\bin\open-coreui-${{ matrix.target }}.exe
 
       - name: Build Desktop (Unix)
-        if: runner.os != 'Windows'
+        if: |
+          steps.should_build.outputs.build == 'true' &&
+          runner.os != 'Windows' &&
+          ((github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.build_desktop == true))
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           PKG_CONFIG_SYSROOT_DIR: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/aarch64-linux-gnu' || '' }}
@@ -308,7 +416,10 @@ jobs:
           cargo tauri build --target ${{ matrix.target }}
 
       - name: Build Desktop (Windows)
-        if: runner.os == 'Windows'
+        if: |
+          steps.should_build.outputs.build == 'true' &&
+          runner.os == 'Windows' &&
+          ((github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.build_desktop == true))
         env:
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_INCREMENTAL: 0
@@ -321,6 +432,7 @@ jobs:
           cargo tauri build --target ${{ matrix.target }}
 
       - name: Upload Artifacts
+        if: steps.should_build.outputs.build == 'true'
         uses: actions/upload-artifact@v5
         with:
           name: build-${{ matrix.target }}
@@ -332,7 +444,12 @@ jobs:
 
   release:
     needs: [build, build-backend-slim]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: |
+      always() &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.build-backend-slim.result == 'success' || needs.build-backend-slim.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.create_release == true))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -341,12 +458,14 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v6
         with:
           path: artifacts
           pattern: build-*
 
       - name: Download Slim Backend Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v6
         with:
           path: artifacts
@@ -359,37 +478,42 @@ jobs:
           VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
 
           # Copy desktop app packages (only the final installer packages)
-          find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.rpm" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.dmg" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.msi" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*-setup.exe" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.app.tar.gz" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.AppImage" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*.rpm" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*.dmg" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*.msi" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*-setup.exe" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*.app.tar.gz" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -name "*.AppImage" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
 
-          # Copy and rename backend binaries with version
-          find artifacts/build-x86_64-unknown-linux-gnu -name "open-coreui-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-unknown-linux-gnu \;
-          find artifacts/build-aarch64-unknown-linux-gnu -name "open-coreui-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-unknown-linux-gnu \;
-          find artifacts/build-x86_64-apple-darwin -name "open-coreui-x86_64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-apple-darwin \;
-          find artifacts/build-aarch64-apple-darwin -name "open-coreui-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-apple-darwin \;
-          find artifacts/build-x86_64-pc-windows-msvc -name "open-coreui-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-pc-windows-msvc.exe \;
-          find artifacts/build-aarch64-pc-windows-msvc -name "open-coreui-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-pc-windows-msvc.exe \;
+          # Copy and rename backend binaries with version (only if they exist)
+          [ -d "artifacts/build-x86_64-unknown-linux-gnu" ] && find artifacts/build-x86_64-unknown-linux-gnu -name "open-coreui-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-unknown-linux-gnu \; 2>/dev/null || true
+          [ -d "artifacts/build-aarch64-unknown-linux-gnu" ] && find artifacts/build-aarch64-unknown-linux-gnu -name "open-coreui-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-unknown-linux-gnu \; 2>/dev/null || true
+          [ -d "artifacts/build-x86_64-apple-darwin" ] && find artifacts/build-x86_64-apple-darwin -name "open-coreui-x86_64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-apple-darwin \; 2>/dev/null || true
+          [ -d "artifacts/build-aarch64-apple-darwin" ] && find artifacts/build-aarch64-apple-darwin -name "open-coreui-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-apple-darwin \; 2>/dev/null || true
+          [ -d "artifacts/build-x86_64-pc-windows-msvc" ] && find artifacts/build-x86_64-pc-windows-msvc -name "open-coreui-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-pc-windows-msvc.exe \; 2>/dev/null || true
+          [ -d "artifacts/build-aarch64-pc-windows-msvc" ] && find artifacts/build-aarch64-pc-windows-msvc -name "open-coreui-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-pc-windows-msvc.exe \; 2>/dev/null || true
 
-          # Copy and rename slim backend binaries with version
-          find artifacts/backend-slim-x86_64-unknown-linux-gnu -name "open-coreui-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-unknown-linux-gnu \;
-          find artifacts/backend-slim-aarch64-unknown-linux-gnu -name "open-coreui-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-unknown-linux-gnu \;
-          find artifacts/backend-slim-x86_64-apple-darwin -name "open-coreui-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-apple-darwin \;
-          find artifacts/backend-slim-aarch64-apple-darwin -name "open-coreui-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-apple-darwin \;
-          find artifacts/backend-slim-x86_64-pc-windows-msvc -name "open-coreui-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-pc-windows-msvc.exe \;
-          find artifacts/backend-slim-aarch64-pc-windows-msvc -name "open-coreui-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-pc-windows-msvc.exe \;
+          # Copy and rename slim backend binaries with version (only if they exist)
+          [ -d "artifacts/backend-slim-x86_64-unknown-linux-gnu" ] && find artifacts/backend-slim-x86_64-unknown-linux-gnu -name "open-coreui-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-unknown-linux-gnu \; 2>/dev/null || true
+          [ -d "artifacts/backend-slim-aarch64-unknown-linux-gnu" ] && find artifacts/backend-slim-aarch64-unknown-linux-gnu -name "open-coreui-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-unknown-linux-gnu \; 2>/dev/null || true
+          [ -d "artifacts/backend-slim-x86_64-apple-darwin" ] && find artifacts/backend-slim-x86_64-apple-darwin -name "open-coreui-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-apple-darwin \; 2>/dev/null || true
+          [ -d "artifacts/backend-slim-aarch64-apple-darwin" ] && find artifacts/backend-slim-aarch64-apple-darwin -name "open-coreui-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-apple-darwin \; 2>/dev/null || true
+          [ -d "artifacts/backend-slim-x86_64-pc-windows-msvc" ] && find artifacts/backend-slim-x86_64-pc-windows-msvc -name "open-coreui-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-pc-windows-msvc.exe \; 2>/dev/null || true
+          [ -d "artifacts/backend-slim-aarch64-pc-windows-msvc" ] && find artifacts/backend-slim-aarch64-pc-windows-msvc -name "open-coreui-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-pc-windows-msvc.exe \; 2>/dev/null || true
 
-          ls -lh release-assets/
+          echo "Release assets prepared:"
+          ls -lh release-assets/ || echo "No release assets found"
 
       - name: Generate Checksums
         run: |
           cd release-assets
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          if [ -n "$(ls -A)" ]; then
+            sha256sum * > SHA256SUMS
+            cat SHA256SUMS
+          else
+            echo "No files to generate checksums for"
+          fi
 
       - name: Determine Release Type
         id: release_info
@@ -398,6 +522,17 @@ jobs:
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "tag_name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
             echo "prerelease=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Use custom tag if provided, otherwise auto-generate
+            if [[ -n "${{ inputs.release_tag }}" ]]; then
+              echo "is_release=false" >> $GITHUB_OUTPUT
+              echo "tag_name=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+              echo "prerelease=true" >> $GITHUB_OUTPUT
+            else
+              echo "is_release=false" >> $GITHUB_OUTPUT
+              echo "tag_name=manual-$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+              echo "prerelease=true" >> $GITHUB_OUTPUT
+            fi
           else
             echo "is_release=false" >> $GITHUB_OUTPUT
             echo "tag_name=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
