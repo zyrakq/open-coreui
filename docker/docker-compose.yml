@@ -1,0 +1,58 @@
+services:
+  open-coreui:
+    image: ferronserver/ferron:2
+    ports:
+      - "${PORT:-8168}:8168"
+    depends_on:
+      - open-coreui-backend
+      - open-coreui-frontend
+    configs:
+      - source: open-coreui-reverse
+        target: /etc/ferron.kdl
+    networks:
+      - open-coreui-network
+    restart: unless-stopped
+
+  open-coreui-backend:
+    image: ghcr.io/xxnuo/open-coreui-backend:latest
+    environment:
+      - PORT=8168
+    networks:
+      - open-coreui-network
+    restart: unless-stopped
+    # volumes:
+    #   - ./data:/app/data
+
+  open-coreui-frontend:
+    image: ghcr.io/xxnuo/open-coreui-frontend:latest
+    networks:
+      - open-coreui-network
+    restart: unless-stopped
+
+networks:
+  open-coreui-network:
+    driver: bridge
+
+configs:
+  open-coreui-reverse:
+    content: |
+      *:8168 {
+          location "/api" {
+              proxy "http://open-coreui-backend:8168"
+          }
+          location "/openai" {
+              proxy "http://open-coreui-backend:8168"
+          }
+          location "/oauth" {
+              proxy "http://open-coreui-backend:8168"
+          }
+          location "/cache" {
+              proxy "http://open-coreui-backend:8168"
+          }
+          location "/socket.io" {
+              proxy "http://open-coreui-backend:8168"
+          }
+          location "/" {
+              proxy "http://open-coreui-frontend:8168"
+          }
+      }
