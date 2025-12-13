@@ -15,6 +15,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.release_info.outputs.tag_name }}
+      version: ${{ steps.get_version.outputs.version }}
+      is_stable: ${{ steps.release_info.outputs.is_release == 'true' && steps.release_info.outputs.prerelease == 'false' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -122,24 +126,29 @@ jobs:
             echo "prerelease=true" >> $GITHUB_OUTPUT
           fi
 
+      - name: Get Version
+        id: get_version
+        run: |
+          # Get version from tauri.conf.json
+          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Determine version based on git tag
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${TAURI_VERSION}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
       - name: Generate Release Body
         id: generate_body
         run: |
           TAG="${{ steps.release_info.outputs.tag_name }}"
           REPO="${{ github.repository }}"
           IS_RELEASE="${{ steps.release_info.outputs.is_release }}"
-          
-          # Get version from tauri.conf.json
-          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-          
-          # Determine version based on git tag
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            # Otherwise use tauri version
-            VERSION="${TAURI_VERSION}"
-          fi
+          VERSION="${{ steps.get_version.outputs.version }}"
 
           if [ "$IS_RELEASE" == "true" ]; then
             WARNING=""
@@ -224,3 +233,13 @@ jobs:
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-latest:
+    needs: release
+    if: needs.release.outputs.is_stable == 'true'
+    uses: ./.github/workflows/component-update-latest-release.yml
+    with:
+      source_tag: ${{ needs.release.outputs.tag_name }}
+      version: ${{ needs.release.outputs.version }}
+      artifact_name: ${{ inputs.artifact_name }}
+      is_manual: false

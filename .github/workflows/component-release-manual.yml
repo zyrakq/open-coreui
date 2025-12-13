@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: 'open-coreui'
+      update_latest_release:
+        description: 'Update "latest" release (for stable releases only)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -20,9 +25,34 @@ permissions:
 jobs:
   release-manual:
     runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.release_info.outputs.tag_name }}
+      version: ${{ steps.get_version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Get Version
+        id: get_version
+        run: |
+          # Get version from tauri.conf.json
+          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          
+          # Determine version based on release tag
+          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
+            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
+            VERSION="${{ inputs.release_tag }}"
+            VERSION="${VERSION#v}"
+            echo "Using version from tag for all artifacts: ${VERSION}"
+          else
+            # Otherwise use tauri version
+            VERSION="${TAURI_VERSION}"
+            echo "Using version from tauri.conf.json: ${VERSION}"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "Version: ${VERSION}"
 
       - name: Download Backend Full Artifacts
         continue-on-error: true
@@ -95,23 +125,8 @@ jobs:
       - name: Organize Release Assets
         run: |
           mkdir -p release-assets
-
-          # Get version from tauri.conf.json
-          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
           
-          # Determine version based on release tag
-          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
-            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
-            VERSION="${{ inputs.release_tag }}"
-            VERSION="${VERSION#v}"
-            echo "Using version from tag for all artifacts: ${VERSION}"
-          else
-            # Otherwise use tauri version
-            VERSION="${TAURI_VERSION}"
-            echo "Using version from tauri.conf.json: ${VERSION}"
-          fi
-          
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          VERSION="${{ steps.get_version.outputs.version }}"
 
           # Copy desktop app packages (only the final installer packages)
           find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
@@ -330,3 +345,13 @@ jobs:
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-latest:
+    needs: release-manual
+    if: inputs.update_latest_release == true
+    uses: ./.github/workflows/component-update-latest-release.yml
+    with:
+      source_tag: ${{ needs.release-manual.outputs.tag_name }}
+      version: ${{ needs.release-manual.outputs.version }}
+      artifact_name: ${{ inputs.artifact_name }}
+      is_manual: true

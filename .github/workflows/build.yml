@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: ''
+      update_latest_release:
+        description: '🏷️ Update "latest" release (for stable releases)'
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -176,3 +181,4 @@ jobs:
     with:
       release_tag: ${{ inputs.release_tag }}
       artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
+      update_latest_release: ${{ inputs.update_latest_release }}

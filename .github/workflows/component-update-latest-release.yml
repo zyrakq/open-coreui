@@ -1,0 +1,275 @@
+name: Reusable (Update Latest Release)
+
+on:
+  workflow_call:
+    inputs:
+      source_tag:
+        description: 'Source tag name (e.g., v1.2.3)'
+        required: true
+        type: string
+      version:
+        description: 'Version number without v prefix (e.g., 1.2.3)'
+        required: true
+        type: string
+      artifact_name:
+        description: 'Artifact name prefix for release files'
+        required: false
+        type: string
+        default: 'open-coreui'
+      is_manual:
+        description: 'Is this a manual release?'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-latest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Backend Full Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: backend-full-*
+          merge-multiple: true
+
+      - name: Download Desktop Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: desktop-*
+          merge-multiple: true
+
+      - name: Download Slim Backend Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: backend-slim-*
+          merge-multiple: true
+
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts/frontend-build
+          pattern: frontend-build
+
+      - name: Organize Release Assets
+        run: |
+          mkdir -p release-assets
+
+          VERSION="${{ inputs.version }}"
+
+          # Copy desktop app packages (only the final installer packages)
+          find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.rpm" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.dmg" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.msi" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*-setup.exe" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.app.tar.gz" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "*.AppImage" -type f -exec cp {} release-assets/ \;
+
+          # Copy and rename backend binaries with version
+          find artifacts -name "${{ inputs.artifact_name }}-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-unknown-linux-gnu \;
+          find artifacts -name "${{ inputs.artifact_name }}-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-unknown-linux-gnu \;
+          find artifacts -name "${{ inputs.artifact_name }}-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-apple-darwin \;
+          find artifacts -name "${{ inputs.artifact_name }}-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-apple-darwin \;
+          find artifacts -name "${{ inputs.artifact_name }}-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-pc-windows-msvc.exe \;
+          find artifacts -name "${{ inputs.artifact_name }}-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-pc-windows-msvc.exe \;
+
+          # Copy and rename slim backend binaries with version
+          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-unknown-linux-gnu \;
+          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-unknown-linux-gnu \;
+          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-apple-darwin \;
+          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin \;
+          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe \;
+          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe \;
+
+          # Create frontend archive if available
+          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
+            echo "Creating frontend archive..."
+            cd artifacts/frontend-build
+            tar -czf ../../release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz .
+            cd ../..
+            echo "Frontend archive created: ${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz"
+          else
+            echo "No frontend artifacts found, skipping frontend archive creation"
+          fi
+
+          ls -lh release-assets/
+
+      - name: Update Latest Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Delete existing latest tag (locally and remotely)
+          git tag -d latest 2>/dev/null || true
+          git push origin :refs/tags/latest 2>/dev/null || true
+          
+          # Create new latest tag pointing to current commit
+          if [[ "${{ inputs.is_manual }}" == "true" ]]; then
+            git tag -a latest -m "Latest release (manual): ${{ inputs.source_tag }}"
+          else
+            git tag -a latest -m "Latest stable release: ${{ inputs.source_tag }}"
+          fi
+          git push origin latest
+          
+          echo "✅ Updated 'latest' git tag to point to ${{ inputs.source_tag }}"
+
+      - name: Create Latest Release Assets
+        run: |
+          mkdir -p release-assets-latest
+          
+          echo "Creating artifacts with 'latest' suffix for latest release..."
+          
+          # Copy desktop packages with original names
+          find release-assets -name "*.deb" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*.rpm" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*.dmg" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*.msi" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*-setup.exe" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*.app.tar.gz" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          find release-assets -name "*.AppImage" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
+          
+          VERSION="${{ inputs.version }}"
+          
+          # Backend Full binaries - copy and rename with 'latest' suffix
+          for file in release-assets/${{ inputs.artifact_name }}-${VERSION}-*; do
+            [ -f "$file" ] || continue
+            [[ "$file" == *"slim"* ]] && continue
+            filename=$(basename "$file")
+            new_filename=$(echo "$filename" | sed "s/-${VERSION}-/-latest-/")
+            cp "$file" "release-assets-latest/$new_filename"
+            echo "Created: $new_filename"
+          done
+          
+          # Backend Slim binaries - copy and rename with 'latest' suffix
+          for file in release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-*; do
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+            new_filename=$(echo "$filename" | sed "s/-${VERSION}-/-latest-/")
+            cp "$file" "release-assets-latest/$new_filename"
+            echo "Created: $new_filename"
+          done
+          
+          # Frontend archive with 'latest' suffix
+          if [ -f "release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz" ]; then
+            cp "release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz" \
+               "release-assets-latest/${{ inputs.artifact_name }}-frontend-latest.tar.gz"
+            echo "Created: ${{ inputs.artifact_name }}-frontend-latest.tar.gz"
+          fi
+          
+          echo "✅ Created artifacts with 'latest' suffix"
+          ls -lh release-assets-latest/
+
+      - name: Generate Latest Release Body
+        id: generate_body
+        run: |
+          TAG="${{ inputs.source_tag }}"
+          REPO="${{ github.repository }}"
+          VERSION="${{ inputs.version }}"
+          
+          if [[ "${{ inputs.is_manual }}" == "true" ]]; then
+            HEADER="# Latest Release (Manual)"
+            WARNING="⚠️ **Note:** This is a manually designated \"latest\" release and may not represent the most recent stable version."
+          else
+            HEADER="# Latest Stable Release"
+            WARNING="This release is automatically updated to always point to the latest stable version."
+          fi
+          
+          cat > release_body_latest.md << 'EOF'
+          ${HEADER}
+          
+          ${WARNING}
+          
+          **Current Version:** [${TAG}](https://github.com/${REPO}/releases/tag/${TAG})
+          
+          ---
+          
+          ## Desktop Application
+          
+          | Platform | Architecture | Download |
+          |----------|-------------|----------|
+          | Windows | x64 | [Open.CoreUI.Desktop_${VERSION}_x64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64_en-US.msi) |
+          | Windows | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64_en-US.msi) |
+          | macOS | Intel | [Open.CoreUI.Desktop_${VERSION}_x64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64.dmg) |
+          | macOS | Apple Silicon | [Open.CoreUI.Desktop_${VERSION}_aarch64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_aarch64.dmg) |
+          | Linux | x64 | [Open.CoreUI.Desktop_${VERSION}_amd64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_amd64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-${VERSION}-1.x86_64.rpm) |
+          | Linux | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm) |
+          
+          > **macOS Users**: If you see "app is damaged" error, run this command in Terminal App:
+          > 
+          > ```bash
+          > sudo xattr -d com.apple.quarantine "/Applications/Open CoreUI Desktop.app"
+          > ```
+          
+          ## Backend Server (Full - With Embedded Frontend)
+          
+          | Platform | Architecture | Binary |
+          |----------|-------------|--------|
+          | Linux | x64 | [${{ inputs.artifact_name }}-latest-x86_64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-x86_64-unknown-linux-gnu) |
+          | Linux | ARM64 | [${{ inputs.artifact_name }}-latest-aarch64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-aarch64-unknown-linux-gnu) |
+          | macOS | Intel | [${{ inputs.artifact_name }}-latest-x86_64-apple-darwin](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-x86_64-apple-darwin) |
+          | macOS | Apple Silicon | [${{ inputs.artifact_name }}-latest-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-aarch64-apple-darwin) |
+          | Windows | x64 | [${{ inputs.artifact_name }}-latest-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-x86_64-pc-windows-msvc.exe) |
+          | Windows | ARM64 | [${{ inputs.artifact_name }}-latest-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-latest-aarch64-pc-windows-msvc.exe) |
+          
+          ## Backend Server (Slim - No Frontend)
+          
+          **Lightweight API-only binaries (~70% smaller). Use when running frontend separately.**
+          
+          | Platform | Architecture | Binary |
+          |----------|-------------|--------|
+          | Linux | x64 | [${{ inputs.artifact_name }}-slim-latest-x86_64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-x86_64-unknown-linux-gnu) |
+          | Linux | ARM64 | [${{ inputs.artifact_name }}-slim-latest-aarch64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-aarch64-unknown-linux-gnu) |
+          | macOS | Intel | [${{ inputs.artifact_name }}-slim-latest-x86_64-apple-darwin](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-x86_64-apple-darwin) |
+          | macOS | Apple Silicon | [${{ inputs.artifact_name }}-slim-latest-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-aarch64-apple-darwin) |
+          | Windows | x64 | [${{ inputs.artifact_name }}-slim-latest-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-x86_64-pc-windows-msvc.exe) |
+          | Windows | ARM64 | [${{ inputs.artifact_name }}-slim-latest-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-slim-latest-aarch64-pc-windows-msvc.exe) |
+          
+          ## Frontend (Static Build)
+          
+          **Standalone frontend build for custom deployments with Nginx, Apache, Ferron, or other web servers.**
+          
+          | Format | Download |
+          |--------|----------|
+          | tar.gz | [${{ inputs.artifact_name }}-frontend-latest.tar.gz](https://github.com/${REPO}/releases/download/latest/${{ inputs.artifact_name }}-frontend-latest.tar.gz) |
+          
+          📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)
+          
+          ---
+          
+          For version-specific releases and detailed changelog, see: [${TAG}](https://github.com/${REPO}/releases/tag/${TAG})
+          EOF
+          
+          # Replace variables
+          sed -i "s|\${HEADER}|${HEADER}|g" release_body_latest.md
+          sed -i "s|\${WARNING}|${WARNING}|g" release_body_latest.md
+          sed -i "s|\${REPO}|${REPO}|g" release_body_latest.md
+          sed -i "s|\${TAG}|${TAG}|g" release_body_latest.md
+          sed -i "s|\${VERSION}|${VERSION}|g" release_body_latest.md
+          
+          {
+            echo "body<<EOFMARKER"
+            cat release_body_latest.md
+            echo "EOFMARKER"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create/Update Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: ${{ inputs.is_manual && 'Latest Release (Manual)' || 'Latest Stable Release' }}
+          body: ${{ steps.generate_body.outputs.body }}
+          files: release-assets-latest/*
+          prerelease: false
+          draft: false
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
