@@ -48,6 +48,14 @@ jobs:
           pattern: backend-slim-*
           merge-multiple: true
 
+      - name: Download Frontend Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: frontend-build
+          merge-multiple: true
+
       - name: Scan Available Artifacts
         id: scan
         run: |
@@ -73,6 +81,13 @@ jobs:
             HAS_BACKEND_SLIM=true
           fi
           echo "has_backend_slim=$HAS_BACKEND_SLIM" >> $GITHUB_OUTPUT
+          
+          # Check for frontend artifacts
+          HAS_FRONTEND=false
+          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
+            HAS_FRONTEND=true
+          fi
+          echo "has_frontend=$HAS_FRONTEND" >> $GITHUB_OUTPUT
           
           # List all available platforms
           echo "Available artifacts:"
@@ -110,6 +125,17 @@ jobs:
           find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe \; 2>/dev/null || true
           find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe \; 2>/dev/null || true
 
+          # Create frontend archive if available
+          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
+            echo "Creating frontend archive..."
+            cd artifacts/frontend-build
+            tar -czf ../../release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz . 2>/dev/null || true
+            cd ../..
+            echo "Frontend archive created: ${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz"
+          else
+            echo "No frontend artifacts found, skipping frontend archive creation"
+          fi
+
           echo "Release assets prepared:"
           ls -lh release-assets/ || echo "No release assets found"
 
@@ -142,6 +168,7 @@ jobs:
           HAS_DESKTOP="${{ steps.scan.outputs.has_desktop }}"
           HAS_BACKEND="${{ steps.scan.outputs.has_backend }}"
           HAS_BACKEND_SLIM="${{ steps.scan.outputs.has_backend_slim }}"
+          HAS_FRONTEND="${{ steps.scan.outputs.has_frontend }}"
 
           echo "**⚠️ Manual Release**" > release_body.md
           echo "" >> release_body.md
@@ -253,6 +280,20 @@ jobs:
                   ;;
               esac
             done
+          fi
+
+          # Add Frontend section if available
+          if [ "$HAS_FRONTEND" == "true" ]; then
+            echo "## Frontend (Static Build)" >> release_body.md
+            echo "" >> release_body.md
+            echo "**Standalone frontend build for custom deployments.**" >> release_body.md
+            echo "" >> release_body.md
+            echo "| Format | Download |" >> release_body.md
+            echo "|--------|----------|" >> release_body.md
+            echo "| tar.gz | [${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz) |" >> release_body.md
+            echo "" >> release_body.md
+            echo "📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)" >> release_body.md
+            echo "" >> release_body.md
           fi
 
           echo "Generated release body:"

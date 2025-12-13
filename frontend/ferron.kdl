@@ -1,0 +1,9 @@
+* {
+    default_http_port 8168
+    timeout 300000
+    root "/var/www/html"
+    
+    location "/health" {
+        response 200 "healthy\n" type="text/plain"
+    }
+}

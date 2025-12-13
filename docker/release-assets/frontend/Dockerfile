@@ -1,27 +1,24 @@
-ARG GIT_REPO=https://github.com/xxnuo/open-coreui
-ARG GIT_BRANCH=main
+FROM alpine:latest AS unpacker
 
-FROM oven/bun:1 AS frontend-builder
+WORKDIR /tmp
 
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Установка wget для загрузки архива
+RUN apk add --no-cache wget
 
-ARG GIT_REPO
-ARG GIT_BRANCH
+ARG VERSION=latest
+ARG GITHUB_REPO=xxnuo/open-coreui
 
-WORKDIR /app
-RUN git clone --depth 1 --filter=blob:none --sparse ${GIT_REPO} -b ${GIT_BRANCH} repo && \
-    cd repo && \
-    git sparse-checkout set frontend && \
-    cd .. && \
-    mv repo/frontend/* . && \
-    mv repo/frontend/.* . 2>/dev/null || true && \
-    rm -rf repo
-
-RUN bun install --frozen-lockfile
-
-RUN bun run build
+# Загрузка архива фронтенда из релиза
+RUN if [ "$VERSION" = "latest" ]; then \
+      DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/open-coreui-frontend.tar.gz"; \
+    else \
+      DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/open-coreui-frontend-${VERSION}.tar.gz"; \
+    fi && \
+    echo "Downloading from: $DOWNLOAD_URL" && \
+    wget -O frontend.tar.gz "$DOWNLOAD_URL" && \
+    mkdir -p /var/www/html && \
+    tar -xzf frontend.tar.gz -C /var/www/html && \
+    rm frontend.tar.gz
 
 RUN echo '* {\n\
     default_http_port 8168\n\
@@ -31,13 +28,12 @@ RUN echo '* {\n\
     location "/health" {\n\
         response 200 "healthy\\n" type="text/plain"\n\
     }\n\
-}' > /etc/ferron.kdl
+}' > /tmp/ferron.kdl
 
 FROM ferronserver/ferron:2
 
-COPY --from=frontend-builder /app/build /var/www/html
-
-COPY --from=frontend-builder /etc/ferron.kdl /etc/ferron.kdl
+COPY --from=unpacker /var/www/html /var/www/html
+COPY --from=unpacker /tmp/ferron.kdl /etc/ferron.kdl
 
 EXPOSE 8168
 

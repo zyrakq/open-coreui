@@ -40,6 +40,13 @@ jobs:
           pattern: backend-slim-*
           merge-multiple: true
 
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: frontend-build
+          merge-multiple: true
+
       - name: Organize Release Assets
         run: |
           mkdir -p release-assets
@@ -70,6 +77,17 @@ jobs:
           find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin \;
           find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe \;
           find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe \;
+
+          # Create frontend archive if available
+          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
+            echo "Creating frontend archive..."
+            cd artifacts/frontend-build
+            tar -czf ../../release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz .
+            cd ../..
+            echo "Frontend archive created: ${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz"
+          else
+            echo "No frontend artifacts found, skipping frontend archive creation"
+          fi
 
           ls -lh release-assets/
 
@@ -147,6 +165,16 @@ jobs:
           | macOS | Apple Silicon | [${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin) |
           | Windows | x64 | [${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe) |
           | Windows | ARM64 | [${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe) |
+
+          ## Frontend (Static Build)
+
+          **Standalone frontend build for custom deployments with Nginx, Apache, Ferron, or other web servers.**
+
+          | Format | Download |
+          |--------|----------|
+          | tar.gz | [${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz) |
+
+          📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)
           EOF
 
                     # Replace variables
