@@ -74,6 +74,103 @@ jobs:
           path: frontend/build/
           retention-days: 1
 
+  # Build slim backend binaries (no frontend embedded) for all platforms
+  build-backend-slim:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          key: ${{ matrix.target }}-slim
+          cache-all-crates: true
+          shared-key: "rust-build-slim"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo dpkg --add-architecture arm64
+            sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+            sudo sed -i 's/deb mirror/deb [arch=amd64] mirror/g' /etc/apt/sources.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy universe" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates universe" | sudo tee -a /etc/apt/sources.list
+            sudo apt-get update
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libssl-dev:arm64
+          else
+            sudo apt-get update
+            sudo apt-get install -y libssl-dev
+          fi
+
+      - name: Build Backend Slim (Unix)
+        if: runner.os != 'Windows'
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          OPENSSL_DIR: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/lib/aarch64-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu' && '/usr/lib/x86_64-linux-gnu' || '' }}
+          OPENSSL_INCLUDE_DIR: ${{ (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu') && '/usr/include' || '' }}
+          OPENSSL_LIB_DIR: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/lib/aarch64-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu' && '/usr/lib/x86_64-linux-gnu' || '' }}
+          PKG_CONFIG_ALLOW_CROSS: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '1' || '' }}
+          PKG_CONFIG_PATH: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '' }}
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_INCREMENTAL: 0
+        run: |
+          mkdir -p bin
+          cd backend
+          cargo fetch --target ${{ matrix.target }}
+          cargo build --release --no-default-features --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/open-webui-rust ../bin/open-coreui-slim-${{ matrix.target }}
+
+      - name: Build Backend Slim (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_INCREMENTAL: 0
+        run: |
+          mkdir bin
+          cd backend
+          cargo fetch --target ${{ matrix.target }}
+          cargo build --release --no-default-features --target ${{ matrix.target }}
+          copy target/${{ matrix.target }}/release/open-webui-rust.exe ..\bin\open-coreui-slim-${{ matrix.target }}.exe
+
+      - name: Upload Slim Backend Artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: backend-slim-${{ matrix.target }}
+          path: bin/open-coreui-slim-${{ matrix.target }}*
+          if-no-files-found: error
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 30 }}
+
   # Build backend and desktop in one job
   build:
     needs: build-frontend
@@ -234,7 +331,7 @@ jobs:
           retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 30 }}
 
   release:
-    needs: build
+    needs: [build, build-backend-slim]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -248,6 +345,12 @@ jobs:
         with:
           path: artifacts
           pattern: build-*
+
+      - name: Download Slim Backend Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: backend-slim-*
 
       - name: Organize Release Assets
         run: |
@@ -271,6 +374,14 @@ jobs:
           find artifacts/build-aarch64-apple-darwin -name "open-coreui-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-apple-darwin \;
           find artifacts/build-x86_64-pc-windows-msvc -name "open-coreui-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-x86_64-pc-windows-msvc.exe \;
           find artifacts/build-aarch64-pc-windows-msvc -name "open-coreui-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-${VERSION}-aarch64-pc-windows-msvc.exe \;
+
+          # Copy and rename slim backend binaries with version
+          find artifacts/backend-slim-x86_64-unknown-linux-gnu -name "open-coreui-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-unknown-linux-gnu \;
+          find artifacts/backend-slim-aarch64-unknown-linux-gnu -name "open-coreui-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-unknown-linux-gnu \;
+          find artifacts/backend-slim-x86_64-apple-darwin -name "open-coreui-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-apple-darwin \;
+          find artifacts/backend-slim-aarch64-apple-darwin -name "open-coreui-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-apple-darwin \;
+          find artifacts/backend-slim-x86_64-pc-windows-msvc -name "open-coreui-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-x86_64-pc-windows-msvc.exe \;
+          find artifacts/backend-slim-aarch64-pc-windows-msvc -name "open-coreui-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/open-coreui-slim-${VERSION}-aarch64-pc-windows-msvc.exe \;
 
           ls -lh release-assets/
 
@@ -320,12 +431,12 @@ jobs:
           | Linux | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64.deb](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_arm64.deb) / [.rpm](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm) |
 
           > **macOS Users**: If you see "app is damaged" error, run this command in Terminal App:
-          > 
+          >
           > ```bash
           > sudo xattr -d com.apple.quarantine "/Applications/Open CoreUI Desktop.app"
           > ```
 
-          ## Backend Server (CLI)
+          ## Backend Server (Full - With Embedded Frontend)
 
           | Platform | Architecture | Binary |
           |----------|-------------|--------|
@@ -335,6 +446,19 @@ jobs:
           | macOS | Apple Silicon | [open-coreui-${VERSION}-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-${VERSION}-aarch64-apple-darwin) |
           | Windows | x64 | [open-coreui-${VERSION}-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-${VERSION}-x86_64-pc-windows-msvc.exe) |
           | Windows | ARM64 | [open-coreui-${VERSION}-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-${VERSION}-aarch64-pc-windows-msvc.exe) |
+
+          ## Backend Server (Slim - No Frontend)
+
+          **Lightweight API-only binaries (~70% smaller). Use when running frontend separately.**
+
+          | Platform | Architecture | Binary |
+          |----------|-------------|--------|
+          | Linux | x64 | [open-coreui-slim-${VERSION}-x86_64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-x86_64-unknown-linux-gnu) |
+          | Linux | ARM64 | [open-coreui-slim-${VERSION}-aarch64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-aarch64-unknown-linux-gnu) |
+          | macOS | Intel | [open-coreui-slim-${VERSION}-x86_64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-x86_64-apple-darwin) |
+          | macOS | Apple Silicon | [open-coreui-slim-${VERSION}-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-aarch64-apple-darwin) |
+          | Windows | x64 | [open-coreui-slim-${VERSION}-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-x86_64-pc-windows-msvc.exe) |
+          | Windows | ARM64 | [open-coreui-slim-${VERSION}-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/open-coreui-slim-${VERSION}-aarch64-pc-windows-msvc.exe) |
           EOF
 
           # Replace variables
