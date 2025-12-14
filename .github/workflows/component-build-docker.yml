@@ -27,6 +27,10 @@ on:
         required: false
         type: string
         default: 'open-coreui'
+    outputs:
+      image_types_built:
+        description: 'Comma-separated list of successfully built image types'
+        value: ${{ jobs.summary.outputs.image_types_built }}
 
 permissions:
   contents: read
@@ -44,42 +48,48 @@ jobs:
       build_complex: ${{ steps.check.outputs.build_complex }}
       platforms: ${{ steps.check.outputs.platforms }}
       owner_lower: ${{ steps.check.outputs.owner_lower }}
+      image_types_built: ${{ steps.check.outputs.image_types_built }}
     steps:
+      - uses: actions/checkout@v5
+      
       - name: Check which images to build
         id: check
         run: |
-          IMAGE_TYPES="${{ inputs.image_types }}"
+          chmod +x .github/scripts/docker/check-images.sh
+          .github/scripts/docker/check-images.sh \
+            "${{ inputs.image_types }}" \
+            "${{ inputs.docker_platforms }}" \
+            "${{ github.repository_owner }}"
+  
+  summary:
+    runs-on: ubuntu-latest
+    needs: [prepare, build-backend, build-frontend, build-complex]
+    if: always()
+    outputs:
+      image_types_built: ${{ steps.summary.outputs.image_types_built }}
+    steps:
+      - name: Generate summary of built images
+        id: summary
+        run: |
+          BUILT_IMAGES=""
           
-          # Determine which images to build
-          if [[ "$IMAGE_TYPES" == "all" ]]; then
-            echo "build_backend=true" >> $GITHUB_OUTPUT
-            echo "build_frontend=true" >> $GITHUB_OUTPUT
-            echo "build_complex=true" >> $GITHUB_OUTPUT
-          else
-            [[ "$IMAGE_TYPES" == *"backend"* ]] && echo "build_backend=true" >> $GITHUB_OUTPUT || echo "build_backend=false" >> $GITHUB_OUTPUT
-            [[ "$IMAGE_TYPES" == *"frontend"* ]] && echo "build_frontend=true" >> $GITHUB_OUTPUT || echo "build_frontend=false" >> $GITHUB_OUTPUT
-            [[ "$IMAGE_TYPES" == *"complex"* ]] && echo "build_complex=true" >> $GITHUB_OUTPUT || echo "build_complex=false" >> $GITHUB_OUTPUT
+          if [[ "${{ needs.build-backend.result }}" == "success" ]]; then
+            BUILT_IMAGES="${BUILT_IMAGES}backend,"
           fi
           
-          # Determine platforms
-          DOCKER_PLATFORMS="${{ inputs.docker_platforms }}"
-          if [[ "$DOCKER_PLATFORMS" == "all" ]]; then
-            echo "platforms=linux/amd64,linux/arm64" >> $GITHUB_OUTPUT
-          else
-            PLATFORMS=""
-            [[ "$DOCKER_PLATFORMS" == *"linux-x64"* ]] && PLATFORMS="${PLATFORMS}linux/amd64,"
-            [[ "$DOCKER_PLATFORMS" == *"linux-arm64"* ]] && PLATFORMS="${PLATFORMS}linux/arm64,"
-            PLATFORMS="${PLATFORMS%,}"  # Remove trailing comma
-            echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
+          if [[ "${{ needs.build-frontend.result }}" == "success" ]]; then
+            BUILT_IMAGES="${BUILT_IMAGES}frontend,"
           fi
           
-          # Convert repository owner to lowercase for GHCR
-          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "owner_lower=$OWNER_LOWER" >> $GITHUB_OUTPUT
+          if [[ "${{ needs.build-complex.result }}" == "success" ]]; then
+            BUILT_IMAGES="${BUILT_IMAGES}complex,"
+          fi
           
-          echo "Building images: backend=${{ steps.check.outputs.build_backend }}, frontend=${{ steps.check.outputs.build_frontend }}, complex=${{ steps.check.outputs.build_complex }}"
-          echo "Platforms: ${{ steps.check.outputs.platforms }}"
-          echo "Owner: $OWNER_LOWER"
+          # Remove trailing comma
+          BUILT_IMAGES="${BUILT_IMAGES%,}"
+          
+          echo "image_types_built=${BUILT_IMAGES}" >> $GITHUB_OUTPUT
+          echo "Built Docker images: ${BUILT_IMAGES}"
 
   build-backend:
     needs: prepare
@@ -97,19 +107,8 @@ jobs:
 
       - name: Prepare build context
         run: |
-          mkdir -p docker/build/backend/context
-          
-          # Copy binaries and rename for Docker TARGETARCH
-          cp artifacts/${{ inputs.artifact_name }}-slim-x86_64-unknown-linux-gnu docker/build/backend/context/open-coreui-slim-amd64 || true
-          cp artifacts/${{ inputs.artifact_name }}-slim-aarch64-unknown-linux-gnu docker/build/backend/context/open-coreui-slim-arm64 || true
-          
-          # Copy entrypoint script
-          cp docker/build/backend/entrypoint.sh docker/build/backend/context/
-          
-          # Copy LICENSE
-          cp backend/LICENSE docker/build/backend/context/LICENSE
-          
-          ls -la docker/build/backend/context/
+          chmod +x .github/scripts/docker/prepare-backend-context.sh
+          .github/scripts/docker/prepare-backend-context.sh "${{ inputs.artifact_name }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -163,17 +162,8 @@ jobs:
 
       - name: Prepare build context
         run: |
-          mkdir -p docker/build/frontend/context
-          
-          # Create frontend archive
-          cd artifacts/frontend-build
-          tar -czf ../../docker/build/frontend/context/frontend-build.tar.gz .
-          cd ../..
-          
-          # Copy LICENSE
-          cp frontend/src/LICENSE docker/build/frontend/context/LICENSE
-          
-          ls -la docker/build/frontend/context/
+          chmod +x .github/scripts/docker/prepare-frontend-context.sh
+          .github/scripts/docker/prepare-frontend-context.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -228,20 +218,8 @@ jobs:
 
       - name: Prepare build context
         run: |
-          mkdir -p docker/build/complex/context
-          
-          # Copy binaries and rename for Docker TARGETARCH
-          cp artifacts/${{ inputs.artifact_name }}-x86_64-unknown-linux-gnu docker/build/complex/context/open-coreui-amd64 || true
-          cp artifacts/${{ inputs.artifact_name }}-aarch64-unknown-linux-gnu docker/build/complex/context/open-coreui-arm64 || true
-          
-          # Copy entrypoint script
-          cp docker/build/complex/entrypoint.sh docker/build/complex/context/
-          
-          # Copy LICENSE files
-          cp backend/LICENSE docker/build/complex/context/LICENSE-BACKEND
-          cp frontend/src/LICENSE docker/build/complex/context/LICENSE-FRONTEND
-          
-          ls -la docker/build/complex/context/
+          chmod +x .github/scripts/docker/prepare-complex-context.sh
+          .github/scripts/docker/prepare-complex-context.sh "${{ inputs.artifact_name }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

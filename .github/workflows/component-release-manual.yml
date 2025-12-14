@@ -13,11 +13,20 @@ on:
         required: false
         type: string
         default: 'open-coreui'
+      version:
+        description: 'Version from get-version workflow'
+        required: true
+        type: string
       update_latest_release:
         description: 'Update "latest" release (for stable releases only)'
         required: false
         type: boolean
         default: false
+      docker_images_built:
+        description: 'Comma-separated list of built Docker image types (optional)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -27,32 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_info.outputs.tag_name }}
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ inputs.version }}
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Get Version
-        id: get_version
-        run: |
-          # Get version from tauri.conf.json
-          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-          
-          # Determine version based on release tag
-          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
-            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
-            VERSION="${{ inputs.release_tag }}"
-            VERSION="${VERSION#v}"
-            echo "Using version from tag for all artifacts: ${VERSION}"
-          else
-            # Otherwise use tauri version
-            VERSION="${TAURI_VERSION}"
-            echo "Using version from tauri.conf.json: ${VERSION}"
-          fi
-          
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "Version: ${VERSION}"
 
       - name: Download Backend Full Artifacts
         continue-on-error: true
@@ -88,278 +75,43 @@ jobs:
       - name: Scan Available Artifacts
         id: scan
         run: |
-          echo "Scanning available artifacts..."
-          
-          # Check for desktop artifacts
-          HAS_DESKTOP=false
-          if find artifacts -name "*.deb" -o -name "*.rpm" -o -name "*.dmg" -o -name "*.msi" -o -name "*-setup.exe" 2>/dev/null | grep -q .; then
-            HAS_DESKTOP=true
-          fi
-          echo "has_desktop=$HAS_DESKTOP" >> $GITHUB_OUTPUT
-          
-          # Check for backend full artifacts
-          HAS_BACKEND=false
-          if find artifacts -name "${{ inputs.artifact_name }}-*" ! -name "*slim*" 2>/dev/null | grep -q .; then
-            HAS_BACKEND=true
-          fi
-          echo "has_backend=$HAS_BACKEND" >> $GITHUB_OUTPUT
-          
-          # Check for backend slim artifacts
-          HAS_BACKEND_SLIM=false
-          if find artifacts -name "${{ inputs.artifact_name }}-slim-*" 2>/dev/null | grep -q .; then
-            HAS_BACKEND_SLIM=true
-          fi
-          echo "has_backend_slim=$HAS_BACKEND_SLIM" >> $GITHUB_OUTPUT
-          
-          # Check for frontend artifacts
-          HAS_FRONTEND=false
-          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
-            HAS_FRONTEND=true
-          fi
-          echo "has_frontend=$HAS_FRONTEND" >> $GITHUB_OUTPUT
-          
-          # List all available platforms
-          echo "Available artifacts:"
-          ls -R artifacts/ || echo "No artifacts found"
+          chmod +x .github/scripts/release/manual/scan-artifacts.sh
+          .github/scripts/release/manual/scan-artifacts.sh "${{ inputs.artifact_name }}"
 
       - name: Organize Release Assets
         run: |
-          mkdir -p release-assets
-          
-          VERSION="${{ steps.get_version.outputs.version }}"
-
-          # Copy desktop app packages (only the final installer packages)
-          find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*.rpm" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*.dmg" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*.msi" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*-setup.exe" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*.app.tar.gz" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -name "*.AppImage" -type f -exec cp {} release-assets/ \; 2>/dev/null || true
-
-          # Copy and rename backend binaries with version (only if they exist)
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-unknown-linux-gnu \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-unknown-linux-gnu \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-apple-darwin \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-apple-darwin \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-pc-windows-msvc.exe \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-pc-windows-msvc.exe \; 2>/dev/null || true
-
-          # Copy and rename slim backend binaries with version (only if they exist)
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-unknown-linux-gnu \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-unknown-linux-gnu \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-apple-darwin \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe \; 2>/dev/null || true
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe \; 2>/dev/null || true
-
-          # Create frontend archive if available
-          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
-            echo "Creating frontend archive..."
-            cd artifacts/frontend-build
-            tar -czf ../../release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz . 2>/dev/null || true
-            cd ../..
-            echo "Frontend archive created: ${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz"
-          else
-            echo "No frontend artifacts found, skipping frontend archive creation"
-          fi
-
-          echo "Release assets prepared:"
-          ls -lh release-assets/ || echo "No release assets found"
+          chmod +x .github/scripts/release/common/organize-assets.sh
+          .github/scripts/release/common/organize-assets.sh \
+            "${{ inputs.version }}" \
+            "${{ inputs.artifact_name }}" \
+            "true"
 
       - name: Generate Checksums
         run: |
-          cd release-assets
-          if [ -n "$(ls -A 2>/dev/null)" ]; then
-            sha256sum * > SHA256SUMS 2>/dev/null || true
-            cat SHA256SUMS
-          else
-            echo "No files to generate checksums for"
-          fi
+          chmod +x .github/scripts/release/common/generate-checksums.sh
+          .github/scripts/release/common/generate-checksums.sh
 
       - name: Determine Release Tag
         id: release_info
         run: |
-          if [[ -n "${{ inputs.release_tag }}" ]]; then
-            echo "tag_name=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag_name=manual-$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
-          fi
+          chmod +x .github/scripts/release/manual/determine-tag.sh
+          .github/scripts/release/manual/determine-tag.sh "${{ inputs.release_tag }}"
 
       - name: Generate Dynamic Release Body
         id: generate_body
         run: |
-          TAG="${{ steps.release_info.outputs.tag_name }}"
-          REPO="${{ github.repository }}"
-          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
-          VERSION="${{ steps.get_version.outputs.version }}"
+          chmod +x .github/scripts/release/manual/generate-body.sh
+          .github/scripts/release/manual/generate-body.sh \
+            "${{ steps.release_info.outputs.tag_name }}" \
+            "${{ github.repository }}" \
+            "${{ inputs.version }}" \
+            "${{ inputs.artifact_name }}" \
+            "${{ steps.scan.outputs.has_desktop }}" \
+            "${{ steps.scan.outputs.has_backend }}" \
+            "${{ steps.scan.outputs.has_backend_slim }}" \
+            "${{ steps.scan.outputs.has_frontend }}" \
+            "${{ inputs.docker_images_built }}"
           
-          HAS_DESKTOP="${{ steps.scan.outputs.has_desktop }}"
-          HAS_BACKEND="${{ steps.scan.outputs.has_backend }}"
-          HAS_BACKEND_SLIM="${{ steps.scan.outputs.has_backend_slim }}"
-          HAS_FRONTEND="${{ steps.scan.outputs.has_frontend }}"
-
-          echo "**⚠️ Manual Release**" > release_body.md
-          echo "" >> release_body.md
-          echo "This is a development/test release created manually. It may be unstable." >> release_body.md
-          echo "" >> release_body.md
-
-          # Add Desktop section if available
-          if [ "$HAS_DESKTOP" == "true" ]; then
-            echo "## Desktop Application" >> release_body.md
-            echo "" >> release_body.md
-            echo "| Platform | Architecture | Download |" >> release_body.md
-            echo "|----------|-------------|----------|" >> release_body.md
-            
-            # Check each platform and add row if file exists (iterate through actual files)
-            for file in release-assets/Open.CoreUI.Desktop_*; do
-              [ -f "$file" ] || continue
-              filename=$(basename "$file")
-              case "$filename" in
-                *_x64-setup.exe)
-                  echo "| Windows | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) / [.msi](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_x64_en-US.msi) |" >> release_body.md
-                  ;;
-                *_arm64-setup.exe)
-                  echo "| Windows | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) / [.msi](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_arm64_en-US.msi) |" >> release_body.md
-                  ;;
-                *_x64.dmg)
-                  echo "| macOS | Intel | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *_aarch64.dmg)
-                  echo "| macOS | Apple Silicon | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *_amd64.deb)
-                  echo "| Linux | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) / [.rpm](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop-${VERSION}-1.x86_64.rpm) |" >> release_body.md
-                  ;;
-                *_arm64.deb)
-                  echo "| Linux | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) / [.rpm](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm) |" >> release_body.md
-                  ;;
-              esac
-            done
-            
-            echo "" >> release_body.md
-          fi
-
-          # Add Backend Full section if available
-          if [ "$HAS_BACKEND" == "true" ]; then
-            echo "## Backend Server (Full - With Embedded Frontend)" >> release_body.md
-            echo "" >> release_body.md
-            echo "| Platform | Architecture | Binary |" >> release_body.md
-            echo "|----------|-------------|--------|" >> release_body.md
-
-            for file in release-assets/${{ inputs.artifact_name }}-${VERSION}-*; do
-              [ -f "$file" ] || continue
-              [[ "$file" == *"slim"* ]] && continue
-              filename=$(basename "$file")
-              case "$filename" in
-                *x86_64-unknown-linux-gnu)
-                  echo "| Linux | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-unknown-linux-gnu)
-                  echo "| Linux | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *x86_64-apple-darwin)
-                  echo "| macOS | Intel | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-apple-darwin)
-                  echo "| macOS | Apple Silicon | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *x86_64-pc-windows-msvc.exe)
-                  echo "| Windows | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-pc-windows-msvc.exe)
-                  echo "| Windows | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-              esac
-            done
-            
-            echo "" >> release_body.md
-          fi
-
-          # Add Backend Slim section if available
-          if [ "$HAS_BACKEND_SLIM" == "true" ]; then
-            echo "## Backend Server (Slim - No Frontend)" >> release_body.md
-            echo "" >> release_body.md
-            echo "**Lightweight API-only binaries (~70% smaller). Use when running frontend separately.**" >> release_body.md
-            echo "" >> release_body.md
-            echo "| Platform | Architecture | Binary |" >> release_body.md
-            echo "|----------|-------------|--------|" >> release_body.md
-
-            for file in release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-*; do
-              [ -f "$file" ] || continue
-              filename=$(basename "$file")
-              case "$filename" in
-                *x86_64-unknown-linux-gnu)
-                  echo "| Linux | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-unknown-linux-gnu)
-                  echo "| Linux | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *x86_64-apple-darwin)
-                  echo "| macOS | Intel | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-apple-darwin)
-                  echo "| macOS | Apple Silicon | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *x86_64-pc-windows-msvc.exe)
-                  echo "| Windows | x64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-                *aarch64-pc-windows-msvc.exe)
-                  echo "| Windows | ARM64 | [${filename}](https://github.com/${REPO}/releases/download/${TAG}/${filename}) |" >> release_body.md
-                  ;;
-              esac
-            done
-          fi
-
-          # Add Frontend section if available
-          if [ "$HAS_FRONTEND" == "true" ]; then
-            echo "## Frontend (Static Build)" >> release_body.md
-            echo "" >> release_body.md
-            echo "**Standalone frontend build for custom deployments.**" >> release_body.md
-            echo "" >> release_body.md
-            echo "| Format | Download |" >> release_body.md
-            echo "|--------|----------|" >> release_body.md
-            echo "| tar.gz | [${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz) |" >> release_body.md
-            echo "" >> release_body.md
-            echo "📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)" >> release_body.md
-            echo "" >> release_body.md
-          fi
-
-          # Add Docker Images section
-          echo "## Docker Images" >> release_body.md
-          echo "" >> release_body.md
-          echo "**Multi-architecture container images (amd64/arm64) available on GitHub Container Registry:**" >> release_body.md
-          echo "" >> release_body.md
-          echo "| Image | Description | Pull Command |" >> release_body.md
-          echo "|-------|-------------|--------------|" >> release_body.md
-          
-          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
-          
-          if [ "$HAS_BACKEND_SLIM" == "true" ]; then
-            echo "| Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:${VERSION}\` |" >> release_body.md
-          fi
-          
-          if [ "$HAS_FRONTEND" == "true" ]; then
-            echo "| Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:${VERSION}\` |" >> release_body.md
-          fi
-          
-          if [ "$HAS_BACKEND" == "true" ]; then
-            echo "| Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}\` |" >> release_body.md
-          fi
-          
-          echo "" >> release_body.md
-          echo "🐳 [Docker Deployment Guide](https://github.com/${REPO}/blob/main/docker/build/README.md)" >> release_body.md
-          echo "" >> release_body.md
-          echo "**Quick Start:**" >> release_body.md
-          echo "\`\`\`bash" >> release_body.md
-          echo "# Run all-in-one container" >> release_body.md
-          echo "docker run -d -p 8168:8168 -v ./data:/app/data ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}" >> release_body.md
-          echo "\`\`\`" >> release_body.md
-          echo "" >> release_body.md
-
-          echo "Generated release body:"
-          cat release_body.md
-
           {
             echo "body<<EOFMARKER"
             cat release_body.md

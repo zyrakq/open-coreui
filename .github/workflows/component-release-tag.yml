@@ -8,6 +8,10 @@ on:
         required: false
         type: string
         default: 'open-coreui'
+      version:
+        description: 'Version from get-version workflow'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -17,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_info.outputs.tag_name }}
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ inputs.version }}
       is_stable: ${{ steps.release_info.outputs.is_release == 'true' && steps.release_info.outputs.prerelease == 'false' }}
       is_release: ${{ steps.release_info.outputs.is_release }}
       prerelease: ${{ steps.release_info.outputs.prerelease }}
@@ -54,193 +58,38 @@ jobs:
 
       - name: Organize Release Assets
         run: |
-          mkdir -p release-assets
-
-          # Get version from tauri.conf.json
-          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-          
-          # Determine version based on release tag
-          if [[ -n "${{ inputs.release_tag }}" ]] && [[ "${{ inputs.release_tag }}" == v* ]]; then
-            # If tag starts with 'v', use it for all artifacts (remove 'v' prefix)
-            VERSION="${{ inputs.release_tag }}"
-            VERSION="${VERSION#v}"
-            echo "Using version from tag for all artifacts: ${VERSION}"
-          else
-            # Otherwise use tauri version
-            VERSION="${TAURI_VERSION}"
-            echo "Using version from tauri.conf.json: ${VERSION}"
-          fi
-
-          # Copy desktop app packages (only the final installer packages)
-          find artifacts -name "*.deb" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.rpm" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.dmg" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.msi" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*-setup.exe" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.app.tar.gz" -type f -exec cp {} release-assets/ \;
-          find artifacts -name "*.AppImage" -type f -exec cp {} release-assets/ \;
-
-          # Copy and rename backend binaries with version
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-unknown-linux-gnu \;
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-unknown-linux-gnu \;
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-apple-darwin \;
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-apple-darwin \;
-          find artifacts -name "${{ inputs.artifact_name }}-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-x86_64-pc-windows-msvc.exe \;
-          find artifacts -name "${{ inputs.artifact_name }}-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-${VERSION}-aarch64-pc-windows-msvc.exe \;
-
-          # Copy and rename slim backend binaries with version
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-unknown-linux-gnu \;
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-unknown-linux-gnu" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-unknown-linux-gnu \;
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-apple-darwin \;
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-apple-darwin" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin \;
-          find artifacts -name "${{ inputs.artifact_name }}-slim-x86_64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe \;
-          find artifacts -name "${{ inputs.artifact_name }}-slim-aarch64-pc-windows-msvc.exe" -type f -exec cp {} release-assets/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe \;
-
-          # Create frontend archive if available
-          if [ -d "artifacts/frontend-build" ] && [ -n "$(ls -A artifacts/frontend-build 2>/dev/null)" ]; then
-            echo "Creating frontend archive..."
-            cd artifacts/frontend-build
-            tar -czf ../../release-assets/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz .
-            cd ../..
-            echo "Frontend archive created: ${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz"
-          else
-            echo "No frontend artifacts found, skipping frontend archive creation"
-          fi
-
-          ls -lh release-assets/
+          chmod +x .github/scripts/release/common/organize-assets.sh
+          .github/scripts/release/common/organize-assets.sh \
+            "${{ inputs.version }}" \
+            "${{ inputs.artifact_name }}" \
+            "false"
 
       - name: Generate Checksums
         run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          chmod +x .github/scripts/release/common/generate-checksums.sh
+          .github/scripts/release/common/generate-checksums.sh
 
       - name: Determine Release Type
         id: release_info
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "tag_name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          else
-            echo "is_release=false" >> $GITHUB_OUTPUT
-            echo "tag_name=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get Version
-        id: get_version
-        run: |
-          # Get version from tauri.conf.json
-          TAURI_VERSION=$(cat src-tauri/tauri.conf.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-          
-          # Determine version based on git tag
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            VERSION="${TAURI_VERSION}"
-          fi
-          
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION}"
+          chmod +x .github/scripts/release/tag/determine-type.sh
+          .github/scripts/release/tag/determine-type.sh "${{ github.ref }}"
 
       - name: Generate Release Body
         id: generate_body
         run: |
-          TAG="${{ steps.release_info.outputs.tag_name }}"
-          REPO="${{ github.repository }}"
-          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
-          IS_RELEASE="${{ steps.release_info.outputs.is_release }}"
-          VERSION="${{ steps.get_version.outputs.version }}"
-
-          if [ "$IS_RELEASE" == "true" ]; then
-            WARNING=""
-          else
-            WARNING="**⚠️ Development build - may be unstable**"$'\n\n'
-          fi
-
-          cat > release_body.md << 'EOF'
-          ${WARNING}## Desktop Application
-
-          | Platform | Architecture | Download |
-          |----------|-------------|----------|
-          | Windows | x64 | [Open.CoreUI.Desktop_${VERSION}_x64-setup.exe](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_x64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_x64_en-US.msi) |
-          | Windows | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_arm64_en-US.msi) |
-          | macOS | Intel | [Open.CoreUI.Desktop_${VERSION}_x64.dmg](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_x64.dmg) |
-          | macOS | Apple Silicon | [Open.CoreUI.Desktop_${VERSION}_aarch64.dmg](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_aarch64.dmg) |
-          | Linux | x64 | [Open.CoreUI.Desktop_${VERSION}_amd64.deb](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_amd64.deb) / [.rpm](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop-${VERSION}-1.x86_64.rpm) |
-          | Linux | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64.deb](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop_${VERSION}_arm64.deb) / [.rpm](https://github.com/${REPO}/releases/download/${TAG}/Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm) |
-
-          > **macOS Users**: If you see "app is damaged" error, run this command in Terminal App:
-          > 
-          > ```bash
-          > sudo xattr -d com.apple.quarantine "/Applications/Open CoreUI Desktop.app"
-          > ```
-
-          ## Backend Server (Full - With Embedded Frontend)
-
-          | Platform | Architecture | Binary |
-          |----------|-------------|--------|
-          | Linux | x64 | [${{ inputs.artifact_name }}-${VERSION}-x86_64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-x86_64-unknown-linux-gnu) |
-          | Linux | ARM64 | [${{ inputs.artifact_name }}-${VERSION}-aarch64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-aarch64-unknown-linux-gnu) |
-          | macOS | Intel | [${{ inputs.artifact_name }}-${VERSION}-x86_64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-x86_64-apple-darwin) |
-          | macOS | Apple Silicon | [${{ inputs.artifact_name }}-${VERSION}-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-aarch64-apple-darwin) |
-          | Windows | x64 | [${{ inputs.artifact_name }}-${VERSION}-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-x86_64-pc-windows-msvc.exe) |
-          | Windows | ARM64 | [${{ inputs.artifact_name }}-${VERSION}-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-${VERSION}-aarch64-pc-windows-msvc.exe) |
-
-          ## Backend Server (Slim - No Frontend)
-
-          **Lightweight API-only binaries (~70% smaller). Use when running frontend separately.**
-
-          | Platform | Architecture | Binary |
-          |----------|-------------|--------|
-          | Linux | x64 | [${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-unknown-linux-gnu) |
-          | Linux | ARM64 | [${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-unknown-linux-gnu](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-unknown-linux-gnu) |
-          | macOS | Intel | [${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-apple-darwin) |
-          | macOS | Apple Silicon | [${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-apple-darwin) |
-          | Windows | x64 | [${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-x86_64-pc-windows-msvc.exe) |
-          | Windows | ARM64 | [${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-slim-${VERSION}-aarch64-pc-windows-msvc.exe) |
-
-          ## Frontend (Static Build)
-
-          **Standalone frontend build for custom deployments with Nginx, Apache, Ferron, or other web servers.**
-
-          | Format | Download |
-          |--------|----------|
-          | tar.gz | [${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz](https://github.com/${REPO}/releases/download/${TAG}/${{ inputs.artifact_name }}-frontend-${VERSION}.tar.gz) |
-
-          📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)
-
-          ## Docker Images
-
-          **Multi-architecture container images (amd64/arm64) available on GitHub Container Registry:**
-
-          | Image | Description | Pull Command |
-          |-------|-------------|--------------|
-          | Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:${VERSION}\` |
-          | Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:${VERSION}\` |
-          | Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}\` |
-
-          🐳 [Docker Deployment Guide](https://github.com/${REPO}/blob/main/docker/build/README.md)
-
-          **Quick Start:**
-          \`\`\`bash
-          # Run all-in-one container
-          docker run -d -p 8168:8168 -v ./data:/app/data ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}
-          \`\`\`
-          EOF
-
-                    # Replace variables
-                    sed -i "s|\${WARNING}|${WARNING}|g" release_body.md
-                    sed -i "s|\${REPO}|${REPO}|g" release_body.md
-                    sed -i "s|\${REPO_LOWER}|${REPO_LOWER}|g" release_body.md
-                    sed -i "s|\${TAG}|${TAG}|g" release_body.md
-                    sed -i "s|\${VERSION}|${VERSION}|g" release_body.md
-
-                    {
-                      echo "body<<EOFMARKER"
-                      cat release_body.md
-                      echo "EOFMARKER"
+          chmod +x .github/scripts/release/tag/generate-body.sh
+          .github/scripts/release/tag/generate-body.sh \
+            "${{ steps.release_info.outputs.tag_name }}" \
+            "${{ github.repository }}" \
+            "${{ inputs.version }}" \
+            "${{ inputs.artifact_name }}" \
+            "${{ steps.release_info.outputs.is_release }}"
+          
+          {
+            echo "body<<EOFMARKER"
+            cat release_body.md
+            echo "EOFMARKER"
           } >> $GITHUB_OUTPUT
 
       - name: Create Release

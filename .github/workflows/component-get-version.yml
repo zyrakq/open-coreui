@@ -1,0 +1,35 @@
+name: Reusable (Get Version)
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v0.9.7 or empty for auto-detection)'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: 'Version without v prefix (e.g., 0.9.7)'
+        value: ${{ jobs.get-version.outputs.version }}
+      tauri_version:
+        description: 'Version from tauri.conf.json'
+        value: ${{ jobs.get-version.outputs.tauri_version }}
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.determine.outputs.version }}
+      tauri_version: ${{ steps.determine.outputs.tauri_version }}
+    
+    steps:
+      - uses: actions/checkout@v5
+      
+      - name: Determine Version
+        id: determine
+        run: |
+          chmod +x .github/scripts/version/determine.sh
+          .github/scripts/version/determine.sh \
+            "${{ inputs.release_tag }}" \
+            "${{ github.ref }}"

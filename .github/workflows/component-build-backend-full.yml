@@ -52,24 +52,17 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
       - name: Check if platform should be built
         id: should_build
         shell: bash
         run: |
-          if [[ "${{ inputs.target_platforms }}" != "all" ]]; then
-            if [[ "${{ inputs.target_platforms }}" == *"${{ matrix.platform_id }}"* ]]; then
-              echo "build=true" >> $GITHUB_OUTPUT
-            else
-              echo "build=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "build=true" >> $GITHUB_OUTPUT
-          fi
-
-      - uses: actions/checkout@v5
-        if: steps.should_build.outputs.build == 'true'
-        with:
-          submodules: recursive
+          chmod +x .github/scripts/build/check-platform.sh
+          OUTPUT=$(.github/scripts/build/check-platform.sh "${{ inputs.target_platforms }}" "${{ matrix.platform_id }}")
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.should_build.outputs.build == 'true'

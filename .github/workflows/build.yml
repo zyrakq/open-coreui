@@ -78,6 +78,12 @@ env:
   ARTIFACT_NAME: open-coreui
 
 jobs:
+  # Get version for all components
+  get-version:
+    uses: ./.github/workflows/component-get-version.yml
+    with:
+      release_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}
+
   # Compute effective build flags based on dependencies
   compute-build-flags:
     runs-on: ubuntu-latest
@@ -87,43 +93,18 @@ jobs:
       build_backend_slim: ${{ steps.flags.outputs.build_backend_slim }}
       build_desktop: ${{ steps.flags.outputs.build_desktop }}
     steps:
+      - uses: actions/checkout@v5
+      
       - name: Compute build flags
         id: flags
         run: |
-          # For push events, build everything
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "build_frontend=true" >> $GITHUB_OUTPUT
-            echo "build_backend=true" >> $GITHUB_OUTPUT
-            echo "build_backend_slim=true" >> $GITHUB_OUTPUT
-            echo "build_desktop=true" >> $GITHUB_OUTPUT
-          else
-            # For manual dispatch, compute dependencies
-            BUILD_FRONTEND="${{ inputs.build_frontend }}"
-            BUILD_BACKEND="${{ inputs.build_backend }}"
-            BUILD_BACKEND_SLIM="${{ inputs.build_backend_slim }}"
-            BUILD_DESKTOP="${{ inputs.build_desktop }}"
-            
-            # If backend is selected, frontend must be built
-            if [[ "$BUILD_BACKEND" == "true" ]]; then
-              echo "::notice::Backend selected - automatically enabling Frontend"
-              BUILD_FRONTEND="true"
-            fi
-            
-            # If desktop is selected, backend must be built (backend includes frontend)
-            if [[ "$BUILD_DESKTOP" == "true" ]]; then
-              echo "::notice::Desktop selected - automatically enabling Frontend and Backend"
-              BUILD_FRONTEND="true"
-              BUILD_BACKEND="true"
-            fi
-            
-            echo "build_frontend=$BUILD_FRONTEND" >> $GITHUB_OUTPUT
-            echo "build_backend=$BUILD_BACKEND" >> $GITHUB_OUTPUT
-            echo "build_backend_slim=$BUILD_BACKEND_SLIM" >> $GITHUB_OUTPUT
-            echo "build_desktop=$BUILD_DESKTOP" >> $GITHUB_OUTPUT
-            
-            # Log final build configuration
-            echo "::notice::Build configuration: Frontend=$BUILD_FRONTEND, Backend=$BUILD_BACKEND, Backend-Slim=$BUILD_BACKEND_SLIM, Desktop=$BUILD_DESKTOP"
-          fi
+          chmod +x .github/scripts/build/compute-flags.sh
+          .github/scripts/build/compute-flags.sh \
+            "${{ github.event_name }}" \
+            "${{ inputs.build_frontend }}" \
+            "${{ inputs.build_backend }}" \
+            "${{ inputs.build_backend_slim }}" \
+            "${{ inputs.build_desktop }}"
 
   # Build frontend once and cache it
   build-frontend:
@@ -161,7 +142,7 @@ jobs:
 
   # Build desktop application for all platforms
   build-desktop:
-    needs: [compute-build-flags, build-backend-full]
+    needs: [get-version, compute-build-flags, build-backend-full]
     if: |
       always() &&
       (needs.build-backend-full.result == 'success' || needs.build-backend-full.result == 'skipped') &&
@@ -170,72 +151,84 @@ jobs:
     uses: ./.github/workflows/component-build-desktop.yml
     with:
       target_platforms: ${{ github.event_name == 'workflow_dispatch' && inputs.target_platforms || 'all' }}
+      release_version: ${{ needs.get-version.outputs.version }}
     secrets:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-  # Create release for version tags
-  release-tag:
-    needs: [build-frontend, build-backend-full, build-desktop, build-backend-slim]
-    if: startsWith(github.ref, 'refs/tags/v')
-    uses: ./.github/workflows/component-release-tag.yml
-    with:
-      artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
-
-  # Build Docker images after tag release (version tags only, no latest)
+  # Build Docker images for version tags (before release creation)
   build-docker-release:
-    needs: [release-tag]
+    needs: [get-version, build-frontend, build-backend-full, build-desktop, build-backend-slim]
     if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/component-build-docker.yml
     with:
       image_types: 'all'
       docker_platforms: 'all'
-      version: ${{ needs.release-tag.outputs.version }}
+      version: ${{ needs.get-version.outputs.version }}
       update_latest_tag: false
       artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
 
-  # Build Docker images for latest (only when latest release is updated)
+  # Build Docker images for latest (only for stable releases, before release creation)
   build-docker-latest:
-    needs: [release-tag]
+    needs: [get-version, build-frontend, build-backend-full, build-desktop, build-backend-slim]
     if: |
       startsWith(github.ref, 'refs/tags/v') &&
-      needs.release-tag.outputs.is_stable == 'true'
+      !contains(github.ref, '-')
     uses: ./.github/workflows/component-build-docker.yml
     with:
       image_types: 'all'
       docker_platforms: 'all'
-      version: ${{ needs.release-tag.outputs.version }}
+      version: ${{ needs.get-version.outputs.version }}
       update_latest_tag: true
       artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
 
-  # Create manual/test release
-  release-manual:
-    needs: [build-frontend, build-backend-full, build-desktop, build-backend-slim]
+  # Create release for version tags (after Docker images are built)
+  release-tag:
+    needs: [get-version, build-frontend, build-backend-full, build-desktop, build-backend-slim, build-docker-release, build-docker-latest]
+    if: |
+      always() &&
+      (needs.build-docker-release.result == 'success' || needs.build-docker-release.result == 'skipped') &&
+      (needs.build-docker-latest.result == 'success' || needs.build-docker-latest.result == 'skipped') &&
+      startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/component-release-tag.yml
+    with:
+      artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
+      version: ${{ needs.get-version.outputs.version }}
+
+  # Build Docker images for manual workflow (independent of release creation)
+  build-docker-manual:
+    needs: [get-version, build-frontend, build-backend-full, build-desktop, build-backend-slim]
     if: |
       always() &&
       (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
       (needs.build-backend-full.result == 'success' || needs.build-backend-full.result == 'skipped') &&
       (needs.build-desktop.result == 'success' || needs.build-desktop.result == 'skipped') &&
       (needs.build-backend-slim.result == 'success' || needs.build-backend-slim.result == 'skipped') &&
-      github.event_name == 'workflow_dispatch' && inputs.create_release == true
-    uses: ./.github/workflows/component-release-manual.yml
-    with:
-      release_tag: ${{ inputs.release_tag }}
-      artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
-      update_latest_release: ${{ inputs.update_latest_release }}
-
-  # Build Docker images for manual releases
-  build-docker-manual:
-    needs: [release-manual]
-    if: |
-      always() &&
-      needs.release-manual.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.build_docker_images == true
     uses: ./.github/workflows/component-build-docker.yml
     with:
       image_types: ${{ inputs.docker_image_types }}
       docker_platforms: ${{ inputs.docker_platforms }}
-      version: ${{ needs.release-manual.outputs.version }}
+      version: ${{ needs.get-version.outputs.version }}
       update_latest_tag: ${{ inputs.update_latest_release }}
       artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
+
+  # Create manual/test release
+  release-manual:
+    needs: [get-version, build-frontend, build-backend-full, build-desktop, build-backend-slim, build-docker-manual]
+    if: |
+      always() &&
+      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
+      (needs.build-backend-full.result == 'success' || needs.build-backend-full.result == 'skipped') &&
+      (needs.build-desktop.result == 'success' || needs.build-desktop.result == 'skipped') &&
+      (needs.build-backend-slim.result == 'success' || needs.build-backend-slim.result == 'skipped') &&
+      (needs.build-docker-manual.result == 'success' || needs.build-docker-manual.result == 'skipped') &&
+      github.event_name == 'workflow_dispatch' && inputs.create_release == true
+    uses: ./.github/workflows/component-release-manual.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+      artifact_name: ${{ vars.ARTIFACT_NAME || 'open-coreui' }}
+      version: ${{ needs.get-version.outputs.version }}
+      update_latest_release: ${{ inputs.update_latest_release }}
+      docker_images_built: ${{ needs.build-docker-manual.outputs.image_types_built || '' }}

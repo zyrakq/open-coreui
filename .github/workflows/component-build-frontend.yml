@@ -20,8 +20,8 @@ jobs:
       - name: Generate Frontend Cache Key
         id: frontend-hash
         run: |
-          HASH=$(find frontend/src frontend/static frontend/package.json frontend/bun.lock frontend/vite.config.ts frontend/svelte.config.js frontend/tailwind.config.js -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          chmod +x .github/scripts/build/generate-frontend-cache-key.sh
+          .github/scripts/build/generate-frontend-cache-key.sh
 
       - name: Cache Frontend Build
         id: cache-frontend
