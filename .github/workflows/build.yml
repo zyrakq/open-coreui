@@ -68,6 +68,7 @@ on:
       - "frontend/**"
       - "src-tauri/**"
       - ".github/workflows/**"
+      - ".github/scripts/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
