@@ -173,6 +173,7 @@ jobs:
         run: |
           TAG="${{ inputs.source_tag }}"
           REPO="${{ github.repository }}"
+          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
           VERSION="${{ inputs.version }}"
           
           if [[ "${{ inputs.is_manual }}" == "true" ]]; then
@@ -243,6 +244,24 @@ jobs:
           
           📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)
           
+          ## Docker Images
+          
+          **Multi-architecture container images (amd64/arm64) available on GitHub Container Registry:**
+          
+          | Image | Description | Pull Command |
+          |-------|-------------|--------------|
+          | Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:latest\` |
+          | Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:latest\` |
+          | Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:latest\` |
+          
+          🐳 [Docker Deployment Guide](https://github.com/${REPO}/blob/main/docker/build/README.md)
+          
+          **Quick Start:**
+          \`\`\`bash
+          # Run all-in-one container
+          docker run -d -p 8168:8168 -v ./data:/app/data ghcr.io/${REPO_LOWER}/open-coreui:latest
+          \`\`\`
+          
           ---
           
           For version-specific releases and detailed changelog, see: [${TAG}](https://github.com/${REPO}/releases/tag/${TAG})
@@ -252,6 +271,7 @@ jobs:
           sed -i "s|\${HEADER}|${HEADER}|g" release_body_latest.md
           sed -i "s|\${WARNING}|${WARNING}|g" release_body_latest.md
           sed -i "s|\${REPO}|${REPO}|g" release_body_latest.md
+          sed -i "s|\${REPO_LOWER}|${REPO_LOWER}|g" release_body_latest.md
           sed -i "s|\${TAG}|${TAG}|g" release_body_latest.md
           sed -i "s|\${VERSION}|${VERSION}|g" release_body_latest.md
           

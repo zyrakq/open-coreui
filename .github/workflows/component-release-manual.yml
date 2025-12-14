@@ -191,7 +191,8 @@ jobs:
         run: |
           TAG="${{ steps.release_info.outputs.tag_name }}"
           REPO="${{ github.repository }}"
-          VERSION="${{ env.VERSION }}"
+          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
+          VERSION="${{ steps.get_version.outputs.version }}"
           
           HAS_DESKTOP="${{ steps.scan.outputs.has_desktop }}"
           HAS_BACKEND="${{ steps.scan.outputs.has_backend }}"
@@ -323,6 +324,38 @@ jobs:
             echo "📖 [Deployment Instructions](https://github.com/${REPO}/blob/main/docs/FRONTEND_DEPLOYMENT.md)" >> release_body.md
             echo "" >> release_body.md
           fi
+
+          # Add Docker Images section
+          echo "## Docker Images" >> release_body.md
+          echo "" >> release_body.md
+          echo "**Multi-architecture container images (amd64/arm64) available on GitHub Container Registry:**" >> release_body.md
+          echo "" >> release_body.md
+          echo "| Image | Description | Pull Command |" >> release_body.md
+          echo "|-------|-------------|--------------|" >> release_body.md
+          
+          REPO_LOWER=$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')
+          
+          if [ "$HAS_BACKEND_SLIM" == "true" ]; then
+            echo "| Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:${VERSION}\` |" >> release_body.md
+          fi
+          
+          if [ "$HAS_FRONTEND" == "true" ]; then
+            echo "| Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:${VERSION}\` |" >> release_body.md
+          fi
+          
+          if [ "$HAS_BACKEND" == "true" ]; then
+            echo "| Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}\` |" >> release_body.md
+          fi
+          
+          echo "" >> release_body.md
+          echo "🐳 [Docker Deployment Guide](https://github.com/${REPO}/blob/main/docker/build/README.md)" >> release_body.md
+          echo "" >> release_body.md
+          echo "**Quick Start:**" >> release_body.md
+          echo "\`\`\`bash" >> release_body.md
+          echo "# Run all-in-one container" >> release_body.md
+          echo "docker run -d -p 8168:8168 -v ./data:/app/data ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}" >> release_body.md
+          echo "\`\`\`" >> release_body.md
+          echo "" >> release_body.md
 
           echo "Generated release body:"
           cat release_body.md

@@ -1,0 +1,281 @@
+name: Reusable (Build Docker Images)
+
+on:
+  workflow_call:
+    inputs:
+      image_types:
+        description: 'Image types to build (all, backend, frontend, complex, or comma-separated)'
+        required: false
+        type: string
+        default: 'all'
+      docker_platforms:
+        description: 'Docker platforms (all, linux-x64, linux-arm64, or comma-separated)'
+        required: false
+        type: string
+        default: 'all'
+      version:
+        description: 'Version for tagging (e.g., 1.2.3)'
+        required: true
+        type: string
+      update_latest_tag:
+        description: 'Whether to update the latest tag'
+        required: false
+        type: boolean
+        default: false
+      artifact_name:
+        description: 'Artifact name prefix'
+        required: false
+        type: string
+        default: 'open-coreui'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build_backend: ${{ steps.check.outputs.build_backend }}
+      build_frontend: ${{ steps.check.outputs.build_frontend }}
+      build_complex: ${{ steps.check.outputs.build_complex }}
+      platforms: ${{ steps.check.outputs.platforms }}
+      owner_lower: ${{ steps.check.outputs.owner_lower }}
+    steps:
+      - name: Check which images to build
+        id: check
+        run: |
+          IMAGE_TYPES="${{ inputs.image_types }}"
+          
+          # Determine which images to build
+          if [[ "$IMAGE_TYPES" == "all" ]]; then
+            echo "build_backend=true" >> $GITHUB_OUTPUT
+            echo "build_frontend=true" >> $GITHUB_OUTPUT
+            echo "build_complex=true" >> $GITHUB_OUTPUT
+          else
+            [[ "$IMAGE_TYPES" == *"backend"* ]] && echo "build_backend=true" >> $GITHUB_OUTPUT || echo "build_backend=false" >> $GITHUB_OUTPUT
+            [[ "$IMAGE_TYPES" == *"frontend"* ]] && echo "build_frontend=true" >> $GITHUB_OUTPUT || echo "build_frontend=false" >> $GITHUB_OUTPUT
+            [[ "$IMAGE_TYPES" == *"complex"* ]] && echo "build_complex=true" >> $GITHUB_OUTPUT || echo "build_complex=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Determine platforms
+          DOCKER_PLATFORMS="${{ inputs.docker_platforms }}"
+          if [[ "$DOCKER_PLATFORMS" == "all" ]]; then
+            echo "platforms=linux/amd64,linux/arm64" >> $GITHUB_OUTPUT
+          else
+            PLATFORMS=""
+            [[ "$DOCKER_PLATFORMS" == *"linux-x64"* ]] && PLATFORMS="${PLATFORMS}linux/amd64,"
+            [[ "$DOCKER_PLATFORMS" == *"linux-arm64"* ]] && PLATFORMS="${PLATFORMS}linux/arm64,"
+            PLATFORMS="${PLATFORMS%,}"  # Remove trailing comma
+            echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
+          fi
+          
+          # Convert repository owner to lowercase for GHCR
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner_lower=$OWNER_LOWER" >> $GITHUB_OUTPUT
+          
+          echo "Building images: backend=${{ steps.check.outputs.build_backend }}, frontend=${{ steps.check.outputs.build_frontend }}, complex=${{ steps.check.outputs.build_complex }}"
+          echo "Platforms: ${{ steps.check.outputs.platforms }}"
+          echo "Owner: $OWNER_LOWER"
+
+  build-backend:
+    needs: prepare
+    if: needs.prepare.outputs.build_backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Backend Slim Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: backend-slim-*
+          merge-multiple: true
+
+      - name: Prepare build context
+        run: |
+          mkdir -p docker/build/backend/context
+          
+          # Copy binaries and rename for Docker TARGETARCH
+          cp artifacts/${{ inputs.artifact_name }}-slim-x86_64-unknown-linux-gnu docker/build/backend/context/open-coreui-slim-amd64 || true
+          cp artifacts/${{ inputs.artifact_name }}-slim-aarch64-unknown-linux-gnu docker/build/backend/context/open-coreui-slim-arm64 || true
+          
+          # Copy entrypoint script
+          cp docker/build/backend/entrypoint.sh docker/build/backend/context/
+          
+          # Copy LICENSE
+          cp backend/LICENSE docker/build/backend/context/LICENSE
+          
+          ls -la docker/build/backend/context/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.owner_lower }}/open-coreui-backend
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
+            type=raw,value=latest,enable=${{ inputs.update_latest_tag }}
+          labels: |
+            org.opencontainers.image.title=Open CoreUI Backend
+            org.opencontainers.image.description=Lightweight backend server (slim, no frontend)
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: docker/build/backend/context
+          file: docker/build/backend/Dockerfile
+          platforms: ${{ needs.prepare.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-frontend:
+    needs: prepare
+    if: needs.prepare.outputs.build_frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts/frontend-build
+          pattern: frontend-build
+
+      - name: Prepare build context
+        run: |
+          mkdir -p docker/build/frontend/context
+          
+          # Create frontend archive
+          cd artifacts/frontend-build
+          tar -czf ../../docker/build/frontend/context/frontend-build.tar.gz .
+          cd ../..
+          
+          # Copy LICENSE
+          cp frontend/src/LICENSE docker/build/frontend/context/LICENSE
+          
+          ls -la docker/build/frontend/context/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.owner_lower }}/open-coreui-frontend
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
+            type=raw,value=latest,enable=${{ inputs.update_latest_tag }}
+          labels: |
+            org.opencontainers.image.title=Open CoreUI Frontend
+            org.opencontainers.image.description=Static frontend build served by Ferron
+            org.opencontainers.image.licenses=BSD-3-Clause
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: docker/build/frontend/context
+          file: docker/build/frontend/Dockerfile
+          platforms: ${{ needs.prepare.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-complex:
+    needs: prepare
+    if: needs.prepare.outputs.build_complex == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Backend Full Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: backend-full-*
+          merge-multiple: true
+
+      - name: Prepare build context
+        run: |
+          mkdir -p docker/build/complex/context
+          
+          # Copy binaries and rename for Docker TARGETARCH
+          cp artifacts/${{ inputs.artifact_name }}-x86_64-unknown-linux-gnu docker/build/complex/context/open-coreui-amd64 || true
+          cp artifacts/${{ inputs.artifact_name }}-aarch64-unknown-linux-gnu docker/build/complex/context/open-coreui-arm64 || true
+          
+          # Copy entrypoint script
+          cp docker/build/complex/entrypoint.sh docker/build/complex/context/
+          
+          # Copy LICENSE files
+          cp backend/LICENSE docker/build/complex/context/LICENSE-BACKEND
+          cp frontend/src/LICENSE docker/build/complex/context/LICENSE-FRONTEND
+          
+          ls -la docker/build/complex/context/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.owner_lower }}/open-coreui
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
+            type=raw,value=latest,enable=${{ inputs.update_latest_tag }}
+          labels: |
+            org.opencontainers.image.title=Open CoreUI
+            org.opencontainers.image.description=Full backend server with embedded frontend
+            org.opencontainers.image.licenses=Apache-2.0 AND BSD-3-Clause
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: docker/build/complex/context
+          file: docker/build/complex/Dockerfile
+          platforms: ${{ needs.prepare.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
