@@ -128,16 +128,30 @@ jobs:
           
           echo "Creating artifacts with 'latest' suffix for latest release..."
           
-          # Copy desktop packages with original names
-          find release-assets -name "*.deb" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*.rpm" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*.dmg" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*.msi" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*-setup.exe" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*.app.tar.gz" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          find release-assets -name "*.AppImage" -type f -exec cp {} release-assets-latest/ \; 2>/dev/null || true
-          
           VERSION="${{ inputs.version }}"
+          
+          # Copy and rename desktop packages with 'latest' in filename
+          # Windows x64
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_x64-setup.exe" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_x64-setup.exe \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_x64_en-US.msi" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_x64_en-US.msi \; 2>/dev/null || true
+          
+          # Windows ARM64
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_arm64-setup.exe \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_arm64_en-US.msi" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_arm64_en-US.msi \; 2>/dev/null || true
+          
+          # macOS
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_x64.dmg" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_x64.dmg \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_aarch64.dmg" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_aarch64.dmg \; 2>/dev/null || true
+          
+          # Linux
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_amd64.deb" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_amd64.deb \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop_${VERSION}_arm64.deb" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop_latest_arm64.deb \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop-${VERSION}-1.x86_64.rpm" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop-latest-1.x86_64.rpm \; 2>/dev/null || true
+          find release-assets -name "Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm" -type f -exec cp {} release-assets-latest/Open.CoreUI.Desktop-latest-1.aarch64.rpm \; 2>/dev/null || true
+          
+          # AppImage and app.tar.gz
+          find release-assets -name "*.AppImage" -type f -exec bash -c 'cp "$1" "release-assets-latest/$(basename "$1" | sed "s/_${VERSION}_/_latest_/")"' _ {} \; 2>/dev/null || true
+          find release-assets -name "*.app.tar.gz" -type f -exec bash -c 'cp "$1" "release-assets-latest/$(basename "$1" | sed "s/_${VERSION}_/_latest_/")"' _ {} \; 2>/dev/null || true
           
           # Backend Full binaries - copy and rename with 'latest' suffix
           for file in release-assets/${{ inputs.artifact_name }}-${VERSION}-*; do
@@ -197,12 +211,12 @@ jobs:
           
           | Platform | Architecture | Download |
           |----------|-------------|----------|
-          | Windows | x64 | [Open.CoreUI.Desktop_${VERSION}_x64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64_en-US.msi) |
-          | Windows | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64_en-US.msi) |
-          | macOS | Intel | [Open.CoreUI.Desktop_${VERSION}_x64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_x64.dmg) |
-          | macOS | Apple Silicon | [Open.CoreUI.Desktop_${VERSION}_aarch64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_aarch64.dmg) |
-          | Linux | x64 | [Open.CoreUI.Desktop_${VERSION}_amd64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_amd64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-${VERSION}-1.x86_64.rpm) |
-          | Linux | ARM64 | [Open.CoreUI.Desktop_${VERSION}_arm64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_${VERSION}_arm64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-${VERSION}-1.aarch64.rpm) |
+          | Windows | x64 | [Open.CoreUI.Desktop_latest_x64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_x64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_x64_en-US.msi) |
+          | Windows | ARM64 | [Open.CoreUI.Desktop_latest_arm64-setup.exe](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_arm64-setup.exe) / [.msi](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_arm64_en-US.msi) |
+          | macOS | Intel | [Open.CoreUI.Desktop_latest_x64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_x64.dmg) |
+          | macOS | Apple Silicon | [Open.CoreUI.Desktop_latest_aarch64.dmg](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_aarch64.dmg) |
+          | Linux | x64 | [Open.CoreUI.Desktop_latest_amd64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_amd64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-latest-1.x86_64.rpm) |
+          | Linux | ARM64 | [Open.CoreUI.Desktop_latest_arm64.deb](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop_latest_arm64.deb) / [.rpm](https://github.com/${REPO}/releases/download/latest/Open.CoreUI.Desktop-latest-1.aarch64.rpm) |
           
           > **macOS Users**: If you see "app is damaged" error, run this command in Terminal App:
           > 
