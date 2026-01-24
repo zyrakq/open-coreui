@@ -1,0 +1,55 @@
+{
+    "name": "Open CoreUI Workspace (Archlinux)",
+    "image": "ghcr.io/zyrakq/arch-devcontainer-images/arch-base-dind:latest",
+    "workspaceFolder": "/workspace/open-coreui",
+    "workspaceMount": "source=open-coreui-workspace,target=/workspace/open-coreui,type=volume",
+    "mounts": [
+        "source=open-coreui-home,target=/home/vscode,type=volume"
+    ],
+    "remoteUser": "vscode",
+    "runArgs": [
+        "--name",
+        "open-coreui-workspace",
+        "--network=open-coreui-workspace-network"
+    ],
+    "initializeCommand": [
+        "bash",
+        "-c",
+        "docker network ls | grep -q open-coreui-workspace-network || docker network create open-coreui-workspace-network"
+    ],
+    "features": {
+        "ghcr.io/zyrakq/arch-devcontainer-features/rust:2": {
+            "globalCrates": "cargo-audit"
+        },
+        "ghcr.io/zyrakq/arch-devcontainer-features/bun:1": {
+            "globalPackages": "typescript"
+        },
+        "ghcr.io/zyrakq/arch-devcontainer-features/clone-repo:1": {
+            "repoUrl": "git@github.com:zyrakq/open-coreui.git",
+            "targetDir": "/workspace/open-coreui"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                // VSCode
+                "vscode-icons-team.vscode-icons",
+                "aaron-bond.better-comments",
+                "IBM.output-colorizer",
+                // Markdown
+                "davidanson.vscode-markdownlint",
+                // Docker
+                "ms-azuretools.vscode-docker",
+                // Git
+                "eamodio.gitlens",
+                "codezombiech.gitignore",
+                // AI Assistant
+                "saoudrizwan.claude-dev",
+                // Web
+                "dbaeumer.vscode-eslint",
+                "esbenp.prettier-vscode",
+                "oven.bun-vscode"
+            ]
+        }
+    }
+}
