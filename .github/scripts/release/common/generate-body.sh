@@ -1,8 +1,17 @@
 #!/bin/bash
 set -e
+set -u
+set -o pipefail
 
-# Script to generate release body for manual releases
-# Usage: generate-release-body.sh <tag> <repo> <version> <artifact_name> <has_desktop> <has_backend> <has_backend_slim> <has_frontend> [docker_images]
+# Script: generate-body.sh
+# Description: Generate release body with dynamic artifact detection
+# Usage: generate-body.sh <tag> <repo> <version> <artifact_name> <has_desktop> <has_backend> <has_backend_slim> <has_frontend> <is_manual> <is_prerelease> [docker_images]
+# Example: generate-body.sh "v0.9.7" "owner/repo" "0.9.7" "open-coreui" "true" "true" "true" "true" "false" "false" ""
+
+if [[ $# -lt 10 ]]; then
+  echo "Usage: $0 <tag> <repo> <version> <artifact_name> <has_desktop> <has_backend> <has_backend_slim> <has_frontend> <is_manual> <is_prerelease> [docker_images]"
+  exit 1
+fi
 
 TAG="$1"
 REPO="$2"
@@ -12,14 +21,24 @@ HAS_DESKTOP="$5"
 HAS_BACKEND="$6"
 HAS_BACKEND_SLIM="$7"
 HAS_FRONTEND="$8"
-DOCKER_IMAGES="${9:-}"  # Optional: comma-separated list of built Docker images
+IS_MANUAL="$9"
+IS_PRERELEASE="${10}"
+DOCKER_IMAGES="${11:-}"
 
 REPO_LOWER=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')
 
-echo "**⚠️ Manual Release**" > release_body.md
-echo "" >> release_body.md
-echo "This is a development/test release created manually. It may be unstable." >> release_body.md
-echo "" >> release_body.md
+# Generate header with appropriate warning
+if [ "$IS_MANUAL" == "true" ]; then
+  echo "**⚠️ Manual Release**" > release_body.md
+  echo "" >> release_body.md
+  echo "This is a development/test release created manually. It may be unstable." >> release_body.md
+  echo "" >> release_body.md
+elif [ "$IS_PRERELEASE" == "true" ]; then
+  echo "**⚠️ Development build - may be unstable**" > release_body.md
+  echo "" >> release_body.md
+else
+  echo "" > release_body.md
+fi
 
 # Add Desktop section if available
 if [ "$HAS_DESKTOP" == "true" ]; then
@@ -54,6 +73,14 @@ if [ "$HAS_DESKTOP" == "true" ]; then
     esac
   done
   
+  echo "" >> release_body.md
+  
+  # Add macOS quarantine instruction for desktop builds
+  echo "> **macOS Users**: If you see \"app is damaged\" error, run this command in Terminal App:" >> release_body.md
+  echo "> " >> release_body.md
+  echo "> \`\`\`bash" >> release_body.md
+  echo "> sudo xattr -d com.apple.quarantine \"/Applications/Open CoreUI Desktop.app\"" >> release_body.md
+  echo "> \`\`\`" >> release_body.md
   echo "" >> release_body.md
 fi
 
@@ -126,6 +153,8 @@ if [ "$HAS_BACKEND_SLIM" == "true" ]; then
         ;;
     esac
   done
+  
+  echo "" >> release_body.md
 fi
 
 # Add Frontend section if available
@@ -142,8 +171,10 @@ if [ "$HAS_FRONTEND" == "true" ]; then
   echo "" >> release_body.md
 fi
 
-# Add Docker Images section if provided
-if [ -n "$DOCKER_IMAGES" ]; then
+# Add Docker Images section
+# For tag releases: always show all Docker images
+# For manual releases: only show if docker_images_built is provided
+if [ "$IS_MANUAL" == "false" ] || [ -n "$DOCKER_IMAGES" ]; then
   echo "## Docker Images" >> release_body.md
   echo "" >> release_body.md
   echo "**Multi-architecture container images (amd64/arm64) available on GitHub Container Registry:**" >> release_body.md
@@ -151,17 +182,24 @@ if [ -n "$DOCKER_IMAGES" ]; then
   echo "| Image | Description | Pull Command |" >> release_body.md
   echo "|-------|-------------|--------------|" >> release_body.md
   
-  # Add images based on what was built
-  if [[ "$DOCKER_IMAGES" == *"backend"* ]]; then
+  if [ "$IS_MANUAL" == "false" ]; then
+    # Tag release: show all images
     echo "| Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:${VERSION}\` |" >> release_body.md
-  fi
-  
-  if [[ "$DOCKER_IMAGES" == *"frontend"* ]]; then
     echo "| Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:${VERSION}\` |" >> release_body.md
-  fi
-  
-  if [[ "$DOCKER_IMAGES" == *"complex"* ]]; then
     echo "| Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}\` |" >> release_body.md
+  else
+    # Manual release: show only built images
+    if [[ "$DOCKER_IMAGES" == *"backend"* ]]; then
+      echo "| Backend (Slim) | Lightweight API-only server | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-backend:${VERSION}\` |" >> release_body.md
+    fi
+    
+    if [[ "$DOCKER_IMAGES" == *"frontend"* ]]; then
+      echo "| Frontend | Static frontend with Ferron | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui-frontend:${VERSION}\` |" >> release_body.md
+    fi
+    
+    if [[ "$DOCKER_IMAGES" == *"complex"* ]]; then
+      echo "| Complex (Full) | All-in-one with embedded frontend | \`docker pull ghcr.io/${REPO_LOWER}/open-coreui:${VERSION}\` |" >> release_body.md
+    fi
   fi
   
   echo "" >> release_body.md
@@ -174,5 +212,5 @@ if [ -n "$DOCKER_IMAGES" ]; then
   echo "\`\`\`" >> release_body.md
 fi
 
-echo "Generated release body:"
+echo "✅ Release body generated successfully"
 cat release_body.md

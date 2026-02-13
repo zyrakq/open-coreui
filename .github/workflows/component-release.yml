@@ -1,29 +1,29 @@
-name: Reusable (Release Manual)
+name: Reusable (Release)
 
 on:
   workflow_call:
     inputs:
-      release_tag:
-        description: 'Release Tag (e.g., v0.9.7-test or leave empty for auto-generated)'
-        required: false
+      version:
+        description: 'Version from get-version workflow'
+        required: true
         type: string
-        default: ''
       artifact_name:
         description: 'Artifact name prefix for release files'
         required: false
         type: string
         default: 'open-coreui'
-      version:
-        description: 'Version from get-version workflow'
-        required: true
+      release_tag:
+        description: 'Release Tag for manual releases (optional)'
+        required: false
         type: string
+        default: ''
       update_latest_release:
         description: 'Update "latest" release (for stable releases only)'
         required: false
         type: boolean
         default: false
       docker_images_built:
-        description: 'Comma-separated list of built Docker image types (optional)'
+        description: 'Comma-separated list of built Docker image types (optional, for manual releases)'
         required: false
         type: string
         default: ''
@@ -32,14 +32,52 @@ permissions:
   contents: write
 
 jobs:
-  release-manual:
+  release:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_info.outputs.tag_name }}
       version: ${{ inputs.version }}
+      is_stable: ${{ steps.release_info.outputs.is_stable }}
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Determine Release Type and Tag
+        id: release_info
+        run: |
+          # Determine if this is a tag release or manual release
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Tag release
+            TAG_NAME="${{ github.ref_name }}"
+            IS_MANUAL="false"
+            # Determine if prerelease based on tag pattern
+            if [[ "$TAG_NAME" == *"-"* ]]; then
+              IS_PRERELEASE="true"
+              IS_STABLE="false"
+            else
+              IS_PRERELEASE="false"
+              IS_STABLE="true"
+            fi
+          else
+            # Manual release
+            IS_MANUAL="true"
+            IS_PRERELEASE="true"
+            IS_STABLE="false"
+            if [[ -n "${{ inputs.release_tag }}" ]]; then
+              TAG_NAME="${{ inputs.release_tag }}"
+            else
+              TAG_NAME="manual-$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)"
+            fi
+          fi
+
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "is_manual=$IS_MANUAL" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "is_stable=$IS_STABLE" >> $GITHUB_OUTPUT
+          echo "Release type: $([[ "$IS_MANUAL" == "true" ]] && echo "manual" || echo "tag")"
+          echo "Tag: $TAG_NAME"
+          echo "Prerelease: $IS_PRERELEASE"
+          echo "Stable: $IS_STABLE"
 
       - name: Download Backend Full Artifacts
         continue-on-error: true
@@ -75,8 +113,8 @@ jobs:
       - name: Scan Available Artifacts
         id: scan
         run: |
-          chmod +x .github/scripts/release/manual/scan-artifacts.sh
-          .github/scripts/release/manual/scan-artifacts.sh "${{ inputs.artifact_name }}"
+          chmod +x .github/scripts/release/common/scan-artifacts.sh
+          .github/scripts/release/common/scan-artifacts.sh "${{ inputs.artifact_name }}"
 
       - name: Organize Release Assets
         run: |
@@ -91,17 +129,11 @@ jobs:
           chmod +x .github/scripts/release/common/generate-checksums.sh
           .github/scripts/release/common/generate-checksums.sh
 
-      - name: Determine Release Tag
-        id: release_info
-        run: |
-          chmod +x .github/scripts/release/manual/determine-tag.sh
-          .github/scripts/release/manual/determine-tag.sh "${{ inputs.release_tag }}"
-
-      - name: Generate Dynamic Release Body
+      - name: Generate Release Body
         id: generate_body
         run: |
-          chmod +x .github/scripts/release/manual/generate-body.sh
-          .github/scripts/release/manual/generate-body.sh \
+          chmod +x .github/scripts/release/common/generate-body.sh
+          .github/scripts/release/common/generate-body.sh \
             "${{ steps.release_info.outputs.tag_name }}" \
             "${{ github.repository }}" \
             "${{ inputs.version }}" \
@@ -110,6 +142,8 @@ jobs:
             "${{ steps.scan.outputs.has_backend }}" \
             "${{ steps.scan.outputs.has_backend_slim }}" \
             "${{ steps.scan.outputs.has_frontend }}" \
+            "${{ steps.release_info.outputs.is_manual }}" \
+            "${{ steps.release_info.outputs.is_prerelease }}" \
             "${{ inputs.docker_images_built }}"
           
           {
@@ -118,25 +152,25 @@ jobs:
             echo "EOFMARKER"
           } >> $GITHUB_OUTPUT
 
-      - name: Create Manual Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_info.outputs.tag_name }}
-          name: Manual Release (${{ steps.release_info.outputs.tag_name }})
+          name: ${{ steps.release_info.outputs.is_manual == 'true' && format('Manual Release ({0})', steps.release_info.outputs.tag_name) || format('Release {0}', steps.release_info.outputs.tag_name) }}
           body: ${{ steps.generate_body.outputs.body }}
           files: release-assets/*
-          prerelease: true
+          prerelease: ${{ steps.release_info.outputs.is_prerelease }}
           draft: false
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   update-latest:
-    needs: release-manual
-    if: inputs.update_latest_release == true
+    needs: release
+    if: inputs.update_latest_release == true || needs.release.outputs.is_stable == 'true'
     uses: ./.github/workflows/component-update-latest-release.yml
     with:
-      source_tag: ${{ needs.release-manual.outputs.tag_name }}
-      version: ${{ needs.release-manual.outputs.version }}
+      source_tag: ${{ needs.release.outputs.tag_name }}
+      version: ${{ needs.release.outputs.version }}
       artifact_name: ${{ inputs.artifact_name }}
-      is_manual: true
+      is_manual: ${{ github.ref != 'refs/tags/v*' }}
