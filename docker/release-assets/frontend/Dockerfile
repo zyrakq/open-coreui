@@ -2,13 +2,13 @@ FROM alpine:latest AS unpacker
 
 WORKDIR /tmp
 
-# Установка wget для загрузки архива
+# Install wget for downloading the archive
 RUN apk add --no-cache wget
 
 ARG VERSION=latest
 ARG GITHUB_REPO=xxnuo/open-coreui
 
-# Загрузка архива фронтенда из релиза
+# Download the frontend archive from the release
 RUN if [ "$VERSION" = "latest" ]; then \
       DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/open-coreui-frontend.tar.gz"; \
     else \
